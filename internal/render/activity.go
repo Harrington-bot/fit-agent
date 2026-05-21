@@ -620,51 +620,49 @@ func windDirection(deg int) string {
 // Returns (0, 0) when GPS data is unavailable or insufficient.
 func segmentWindPct(records []fitparse.Record, segStart, segEnd float64, windFromDeg int) (headwind, tailwind float64) {
 	// Collect GPS points within this segment.
-	type pt struct{ lat, lon float64 }
+	type pt struct{ lat, lon, dist float64 }
 	var pts []pt
 	for _, r := range records {
 		if !r.LatLonValid {
 			continue
 		}
 		if r.Distance >= segStart && r.Distance <= segEnd {
-			pts = append(pts, pt{r.Lat, r.Lon})
+			pts = append(pts, pt{r.Lat, r.Lon, r.Distance})
 		}
 	}
 	if len(pts) < 2 {
 		return 0, 0
 	}
 
-	// Compute the mean bearing across consecutive GPS point pairs.
-	// Use circular mean to handle the 0°/360° wraparound.
-	var sinSum, cosSum float64
-	count := 0
-	for i := 1; i < len(pts); i++ {
-		bearing := gpsBearing(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
-		sinSum += math.Sin(bearing * math.Pi / 180)
-		cosSum += math.Cos(bearing * math.Pi / 180)
-		count++
-	}
-	if count == 0 {
-		return 0, 0
-	}
-	meanBearing := math.Atan2(sinSum/float64(count), cosSum/float64(count)) * 180 / math.Pi
-	if meanBearing < 0 {
-		meanBearing += 360
-	}
-
 	// Wind is FROM windFromDeg; the wind vector points TO windFromDeg+180.
 	windToDeg := math.Mod(float64(windFromDeg+180), 360)
 
-	// Component of wind along the direction of travel.
-	// cos(angle) = 1  → pure tailwind
-	// cos(angle) = -1 → pure headwind
-	angle := (meanBearing - windToDeg) * math.Pi / 180
-	component := math.Cos(angle)
-
-	if component > 0 {
-		return 0, math.Round(component*100*10) / 10
+	// Compute distance-weighted average wind component across consecutive GPS
+	// pairs. Each pair contributes cos(bearing - wind_to_deg) weighted by the
+	// distance between the two points, so 200m of headwind and 800m of tailwind
+	// produce a net result proportional to actual exposure rather than a mean
+	// bearing that can mask direction reversals.
+	var weightedSum, totalDist float64
+	for i := 1; i < len(pts); i++ {
+		bearing := gpsBearing(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
+		pairDist := pts[i].dist - pts[i-1].dist
+		if pairDist <= 0 {
+			pairDist = haversineM(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
+		}
+		angle := (bearing - windToDeg) * math.Pi / 180
+		component := math.Cos(angle) // +1=tailwind, -1=headwind
+		weightedSum += component * pairDist
+		totalDist += pairDist
 	}
-	return math.Round(-component*100*10) / 10, 0
+	if totalDist == 0 {
+		return 0, 0
+	}
+	avg := weightedSum / totalDist
+
+	if avg > 0 {
+		return 0, math.Round(avg*100*10) / 10
+	}
+	return math.Round(-avg*100*10) / 10, 0
 }
 
 // gpsBearing returns the initial bearing in degrees [0, 360) from (lat1, lon1)
@@ -677,4 +675,15 @@ func gpsBearing(lat1, lon1, lat2, lon2 float64) float64 {
 	x := math.Cos(φ1)*math.Sin(φ2) - math.Sin(φ1)*math.Cos(φ2)*math.Cos(Δλ)
 	θ := math.Atan2(y, x) * 180 / math.Pi
 	return math.Mod(θ+360, 360)
+}
+
+// haversineM returns the great-circle distance in metres between two lat/lon points.
+func haversineM(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371000.0
+	φ1 := lat1 * math.Pi / 180
+	φ2 := lat2 * math.Pi / 180
+	Δφ := (lat2 - lat1) * math.Pi / 180
+	Δλ := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(Δφ/2)*math.Sin(Δφ/2) + math.Cos(φ1)*math.Cos(φ2)*math.Sin(Δλ/2)*math.Sin(Δλ/2)
+	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
