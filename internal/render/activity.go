@@ -236,12 +236,8 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 			}
 		}
 		hw, tw := segmentWindPct(records, lapStartDist, lapStartDist+l.Distance, *windDeg)
-		if hw > 0 {
-			fmt.Fprintf(b, "    headwind_pct: %s\n", formatFloat(hw, 1))
-		}
-		if tw > 0 {
-			fmt.Fprintf(b, "    tailwind_pct: %s\n", formatFloat(tw, 1))
-		}
+		fmt.Fprintf(b, "    headwind_pct: %s\n", formatFloat(hw, 1))
+		fmt.Fprintf(b, "    tailwind_pct: %s\n", formatFloat(tw, 1))
 	}
 	// Auto-splits: divide long unsegmented active laps into equal segments.
 	if autoSplitM > 0 && l.Distance > float64(autoSplitM) {
@@ -277,12 +273,8 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 				if windDeg != nil {
 					segStart := s.segStartDist
 					hw, tw := segmentWindPct(records, segStart, segStart+s.distanceM, *windDeg)
-					if hw > 0 {
-						fmt.Fprintf(b, "        headwind_pct: %s\n", formatFloat(hw, 1))
-					}
-					if tw > 0 {
-						fmt.Fprintf(b, "        tailwind_pct: %s\n", formatFloat(tw, 1))
-					}
+					fmt.Fprintf(b, "        headwind_pct: %s\n", formatFloat(hw, 1))
+					fmt.Fprintf(b, "        tailwind_pct: %s\n", formatFloat(tw, 1))
 				}
 			}
 		}
@@ -576,12 +568,8 @@ func writeWeather(b *bytes.Buffer, s icu.ActivitySummary) {
 		fmt.Fprintf(b, "  wind_dir_deg: %d\n", *s.PrevailingWindDeg)
 		fmt.Fprintf(b, "  wind_dir: %s\n", windDirection(*s.PrevailingWindDeg))
 	}
-	if s.HeadwindPct > 0 {
-		fmt.Fprintf(b, "  headwind_pct: %s\n", formatFloat(s.HeadwindPct, 1))
-	}
-	if s.TailwindPct > 0 {
-		fmt.Fprintf(b, "  tailwind_pct: %s\n", formatFloat(s.TailwindPct, 1))
-	}
+	fmt.Fprintf(b, "  headwind_pct: %s\n", formatFloat(s.HeadwindPct, 1))
+	fmt.Fprintf(b, "  tailwind_pct: %s\n", formatFloat(s.TailwindPct, 1))
 }
 
 // weatherCondition derives a human-readable condition string from cloud cover and rain.
