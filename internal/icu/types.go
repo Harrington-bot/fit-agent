@@ -56,6 +56,18 @@ type ActivitySummary struct {
 	// file (typically "fit", "tcx", "gpx"). Empty when no file is
 	// associated.
 	FileType string `json:"file_type,omitempty"`
+
+	// Weather fields populated by intervals.icu when has_weather is true.
+	HasWeather        bool    `json:"has_weather,omitempty"`
+	AvgWeatherTemp    float64 `json:"average_weather_temp,omitempty"`
+	AvgFeelsLike      float64 `json:"average_feels_like,omitempty"`
+	AvgClouds         float64 `json:"average_clouds,omitempty"`
+	MaxRain           float64 `json:"max_rain,omitempty"`
+	AvgWindSpeed      float64 `json:"average_wind_speed,omitempty"`
+	AvgWindGust       float64 `json:"average_wind_gust,omitempty"`
+	PrevailingWindDeg *int    `json:"prevailing_wind_deg,omitempty"`
+	HeadwindPct       float64 `json:"headwind_percent,omitempty"`
+	TailwindPct       float64 `json:"tailwind_percent,omitempty"`
 	// Source carries the upload source (e.g. "STRAVA", "GARMIN");
 	// useful for distinguishing manually-entered activities (no
 	// file) from device uploads.

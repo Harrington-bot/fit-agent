@@ -149,6 +149,9 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	} else {
 		b.WriteString("athlete_notes: \"\"\n")
 	}
+	if s.HasWeather {
+		writeWeather(b, s)
+	}
 
 	if a.FIT == nil {
 		return
@@ -519,4 +522,55 @@ func segStatsFromRecords(recs []fitparse.Record, segment int, segStart, segEnd, 
 		seg.avgCadence = cadSum / cadCount
 	}
 	return seg
+}
+
+// writeWeather emits the weather: block for activities where has_weather is true.
+func writeWeather(b *bytes.Buffer, s icu.ActivitySummary) {
+	b.WriteString("weather:\n")
+	fmt.Fprintf(b, "  temp_c: %s\n", formatFloat(s.AvgWeatherTemp, 1))
+	fmt.Fprintf(b, "  feels_like_c: %s\n", formatFloat(s.AvgFeelsLike, 1))
+	fmt.Fprintf(b, "  condition: %s\n", weatherCondition(s.MaxRain, s.AvgClouds))
+	fmt.Fprintf(b, "  cloud_pct: %s\n", formatFloat(s.AvgClouds, 1))
+	fmt.Fprintf(b, "  rain_mm: %s\n", formatFloat(s.MaxRain, 1))
+	fmt.Fprintf(b, "  wind_speed_ms: %s\n", formatFloat(s.AvgWindSpeed, 1))
+	fmt.Fprintf(b, "  wind_gust_ms: %s\n", formatFloat(s.AvgWindGust, 1))
+	if s.PrevailingWindDeg != nil {
+		fmt.Fprintf(b, "  wind_dir_deg: %d\n", *s.PrevailingWindDeg)
+		fmt.Fprintf(b, "  wind_dir: %s\n", windDirection(*s.PrevailingWindDeg))
+	}
+	if s.HeadwindPct > 0 {
+		fmt.Fprintf(b, "  headwind_pct: %s\n", formatFloat(s.HeadwindPct, 1))
+	}
+	if s.TailwindPct > 0 {
+		fmt.Fprintf(b, "  tailwind_pct: %s\n", formatFloat(s.TailwindPct, 1))
+	}
+}
+
+// weatherCondition derives a human-readable condition string from cloud cover and rain.
+func weatherCondition(rainMM, cloudPct float64) string {
+	if rainMM >= 5 {
+		return "Heavy Rain"
+	}
+	if rainMM > 0 {
+		return "Rain"
+	}
+	if cloudPct >= 90 {
+		return "Overcast"
+	}
+	if cloudPct >= 50 {
+		return "Cloudy"
+	}
+	if cloudPct >= 10 {
+		return "Partly Cloudy"
+	}
+	return "Clear"
+}
+
+// windDirection converts a bearing in degrees to a 16-point compass label.
+func windDirection(deg int) string {
+	dirs := []string{"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+		"S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"}
+	// Each sector is 22.5°; offset by half a sector so N is centred on 0°.
+	idx := int((float64(deg)+11.25)/22.5) % 16
+	return dirs[idx]
 }
