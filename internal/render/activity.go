@@ -20,6 +20,7 @@ package render
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -156,10 +157,15 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	if a.FIT == nil {
 		return
 	}
+	// Wind direction for per-segment wind stats (nil when unavailable).
+	var windDeg *int
+	if s.HasWeather && s.PrevailingWindDeg != nil {
+		windDeg = s.PrevailingWindDeg
+	}
 	if len(a.FIT.Laps) > 0 {
 		b.WriteString("laps:\n")
 		for _, l := range a.FIT.Laps {
-			writeLap(b, l, loc, autoSplitM, a.FIT.Records)
+			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg)
 		}
 	}
 	if len(a.FIT.Intervals) > 0 {
@@ -170,7 +176,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	}
 }
 
-func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record) {
+func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int) {
 	fmt.Fprintf(b, "  - i: %d\n", l.Index)
 	if l.Intensity != "" {
 		fmt.Fprintf(b, "    type: %s\n", yamlString(l.Intensity))
@@ -220,6 +226,23 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	if l.Calories > 0 {
 		fmt.Fprintf(b, "    calories: %d\n", l.Calories)
 	}
+	// Lap-level wind stats derived from GPS bearing vs activity wind direction.
+	if windDeg != nil && l.Distance > 0 {
+		var lapStartDist float64
+		for _, r := range records {
+			if !r.Timestamp.Before(l.StartLocal) {
+				lapStartDist = r.Distance
+				break
+			}
+		}
+		hw, tw := segmentWindPct(records, lapStartDist, lapStartDist+l.Distance, *windDeg)
+		if hw > 0 {
+			fmt.Fprintf(b, "    headwind_pct: %s\n", formatFloat(hw, 1))
+		}
+		if tw > 0 {
+			fmt.Fprintf(b, "    tailwind_pct: %s\n", formatFloat(tw, 1))
+		}
+	}
 	// Auto-splits: divide long unsegmented active laps into equal segments.
 	if autoSplitM > 0 && l.Distance > float64(autoSplitM) {
 		segs := autoSplitLap(l, autoSplitM, records)
@@ -250,6 +273,17 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 				if s.elevationLossM > 0 {
 					fmt.Fprintf(b, "        elevation_loss_m: %s\n", formatFloat(s.elevationLossM, 1))
 				}
+				// Per-segment wind stats from GPS bearing.
+				if windDeg != nil {
+					segStart := s.segStartDist
+					hw, tw := segmentWindPct(records, segStart, segStart+s.distanceM, *windDeg)
+					if hw > 0 {
+						fmt.Fprintf(b, "        headwind_pct: %s\n", formatFloat(hw, 1))
+					}
+					if tw > 0 {
+						fmt.Fprintf(b, "        tailwind_pct: %s\n", formatFloat(tw, 1))
+					}
+				}
 			}
 		}
 	}
@@ -272,6 +306,7 @@ func writeInterval(b *bytes.Buffer, iv fitparse.Interval) {
 // autoSplitSegment holds the derived stats for one implicit split segment.
 type autoSplitSegment struct {
 	segment         int
+	segStartDist    float64 // cumulative distance at segment start (metres)
 	distanceM       float64
 	durationS       int
 	avgPaceSecPerKm int
@@ -342,10 +377,12 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 
 		var seg autoSplitSegment
 		seg.segment = i + 1
+		seg.segStartDist = segStart
 		seg.distanceM = dist
 
 		if len(lapRecs) > 0 {
 			seg = segStatsFromRecords(lapRecs, i+1, segStart, segEnd, dist)
+			seg.segStartDist = segStart
 		} else {
 			// Fallback: proportional from lap summary
 			frac := dist / l.Distance
@@ -356,6 +393,7 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 			}
 			seg = autoSplitSegment{
 				segment:         i + 1,
+				segStartDist:    segStart,
 				distanceM:       dist,
 				durationS:       durS,
 				avgPaceSecPerKm: pace,
@@ -573,4 +611,70 @@ func windDirection(deg int) string {
 	// Each sector is 22.5°; offset by half a sector so N is centred on 0°.
 	idx := int((float64(deg)+11.25)/22.5) % 16
 	return dirs[idx]
+}
+
+// segmentWindPct computes headwind and tailwind percentages for a segment
+// defined by [segStart, segEnd) metres of cumulative distance.
+// windFromDeg is the direction the wind is coming FROM (meteorological convention).
+// Returns (headwindPct, tailwindPct) in the range [0, 100].
+// Returns (0, 0) when GPS data is unavailable or insufficient.
+func segmentWindPct(records []fitparse.Record, segStart, segEnd float64, windFromDeg int) (headwind, tailwind float64) {
+	// Collect GPS points within this segment.
+	type pt struct{ lat, lon float64 }
+	var pts []pt
+	for _, r := range records {
+		if !r.LatLonValid {
+			continue
+		}
+		if r.Distance >= segStart && r.Distance <= segEnd {
+			pts = append(pts, pt{r.Lat, r.Lon})
+		}
+	}
+	if len(pts) < 2 {
+		return 0, 0
+	}
+
+	// Compute the mean bearing across consecutive GPS point pairs.
+	// Use circular mean to handle the 0°/360° wraparound.
+	var sinSum, cosSum float64
+	count := 0
+	for i := 1; i < len(pts); i++ {
+		bearing := gpsBearing(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
+		sinSum += math.Sin(bearing * math.Pi / 180)
+		cosSum += math.Cos(bearing * math.Pi / 180)
+		count++
+	}
+	if count == 0 {
+		return 0, 0
+	}
+	meanBearing := math.Atan2(sinSum/float64(count), cosSum/float64(count)) * 180 / math.Pi
+	if meanBearing < 0 {
+		meanBearing += 360
+	}
+
+	// Wind is FROM windFromDeg; the wind vector points TO windFromDeg+180.
+	windToDeg := math.Mod(float64(windFromDeg+180), 360)
+
+	// Component of wind along the direction of travel.
+	// cos(angle) = 1  → pure tailwind
+	// cos(angle) = -1 → pure headwind
+	angle := (meanBearing - windToDeg) * math.Pi / 180
+	component := math.Cos(angle)
+
+	if component > 0 {
+		return 0, math.Round(component*100*10) / 10
+	}
+	return math.Round(-component*100*10) / 10, 0
+}
+
+// gpsBearing returns the initial bearing in degrees [0, 360) from (lat1, lon1)
+// to (lat2, lon2) using the forward azimuth formula.
+func gpsBearing(lat1, lon1, lat2, lon2 float64) float64 {
+	φ1 := lat1 * math.Pi / 180
+	φ2 := lat2 * math.Pi / 180
+	Δλ := (lon2 - lon1) * math.Pi / 180
+	y := math.Sin(Δλ) * math.Cos(φ2)
+	x := math.Cos(φ1)*math.Sin(φ2) - math.Sin(φ1)*math.Cos(φ2)*math.Cos(Δλ)
+	θ := math.Atan2(y, x) * 180 / math.Pi
+	return math.Mod(θ+360, 360)
 }
