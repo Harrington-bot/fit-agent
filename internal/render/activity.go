@@ -630,7 +630,7 @@ func segmentWindPct(records []fitparse.Record, segStart, segEnd float64, windFro
 	// distance between the two points, so 200m of headwind and 800m of tailwind
 	// produce a net result proportional to actual exposure rather than a mean
 	// bearing that can mask direction reversals.
-	var weightedSum, totalDist float64
+	var headwindSum, tailwindSum, totalDist float64
 	for i := 1; i < len(pts); i++ {
 		bearing := gpsBearing(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
 		pairDist := pts[i].dist - pts[i-1].dist
@@ -639,18 +639,19 @@ func segmentWindPct(records []fitparse.Record, segStart, segEnd float64, windFro
 		}
 		angle := (bearing - windToDeg) * math.Pi / 180
 		component := math.Cos(angle) // +1=tailwind, -1=headwind
-		weightedSum += component * pairDist
+		if component > 0 {
+			tailwindSum += component * pairDist
+		} else {
+			headwindSum += -component * pairDist
+		}
 		totalDist += pairDist
 	}
 	if totalDist == 0 {
 		return 0, 0
 	}
-	avg := weightedSum / totalDist
-
-	if avg > 0 {
-		return 0, math.Round(avg*100*10) / 10
-	}
-	return math.Round(-avg*100*10) / 10, 0
+	headwind = math.Round(headwindSum/totalDist*100*10) / 10
+	tailwind = math.Round(tailwindSum/totalDist*100*10) / 10
+	return headwind, tailwind
 }
 
 // gpsBearing returns the initial bearing in degrees [0, 360) from (lat1, lon1)
