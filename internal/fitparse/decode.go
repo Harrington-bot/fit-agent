@@ -38,6 +38,12 @@ type Record struct {
 	// Barometric data is more accurate for relative elevation changes and
 	// allows a tighter noise threshold in gain/loss computation.
 	AltitudeIsBarometric bool
+	// Lat is latitude in degrees. 0 when unavailable; check LatLonValid.
+	Lat float64
+	// Lon is longitude in degrees. 0 when unavailable; check LatLonValid.
+	Lon float64
+	// LatLonValid is true when Lat/Lon are real values.
+	LatLonValid bool
 }
 
 // ParsedActivity is the high-level shape produced from a .fit file.
@@ -330,6 +336,11 @@ func recordFromMesg(r *mesgdef.Record) (Record, bool) {
 		rec.Altitude = float64(r.Altitude)/5.0 - 500.0
 		rec.AltitudeValid = true
 		rec.AltitudeIsBarometric = false
+	}
+	if r.PositionLat != basetype.Sint32Invalid && r.PositionLong != basetype.Sint32Invalid {
+		rec.Lat = float64(r.PositionLat) * (180.0 / (1 << 31))
+		rec.Lon = float64(r.PositionLong) * (180.0 / (1 << 31))
+		rec.LatLonValid = true
 	}
 	return rec, true
 }
