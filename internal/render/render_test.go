@@ -31,9 +31,14 @@ func goldenAssert(t *testing.T, path string, got []byte) {
 	if err != nil {
 		t.Fatalf("read golden %s (run `go test ./internal/render -update` to create): %v", path, err)
 	}
-	if string(got) != string(want) {
+	if normalizeLineEndings(string(got)) != normalizeLineEndings(string(want)) {
 		t.Errorf("output mismatch for %s\n--- want\n%s\n--- got\n%s", path, want, got)
 	}
+}
+
+// normalizeLineEndings replaces \r\n with \n for cross-platform comparison.
+func normalizeLineEndings(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 func mustLoadLocation(t *testing.T, name string) *time.Location {

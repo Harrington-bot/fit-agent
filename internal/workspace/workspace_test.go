@@ -4,13 +4,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestLayoutPaths(t *testing.T) {
-	l := New("/ws")
+	root := filepath.FromSlash("/ws")
+	l := New(root)
 	cases := map[string]string{
 		"FitAgentDir":        l.FitAgentDir(),
 		"ActivitiesDir":      l.ActivitiesDir(),
@@ -28,20 +30,20 @@ func TestLayoutPaths(t *testing.T) {
 		"PointerPath":        l.PointerPath(),
 	}
 	want := map[string]string{
-		"FitAgentDir":        "/ws/fit-agent",
-		"ActivitiesDir":      "/ws/fit-agent/activities",
-		"WellnessDir":        "/ws/fit-agent/wellness",
-		"PlannedWorkoutsDir": "/ws/fit-agent/planned-workouts",
-		"CacheDir":           "/ws/fit-agent/.cache",
-		"CacheActivitiesDir": "/ws/fit-agent/.cache/activities",
-		"CacheWellnessDir":   "/ws/fit-agent/.cache/wellness",
-		"CacheEventsDir":     "/ws/fit-agent/.cache/events",
-		"CacheAthletePath":   "/ws/fit-agent/.cache/athlete.json",
-		"AthleteProfilePath": "/ws/fit-agent/ATHLETE-PROFILE.md",
-		"TrainingPlanPath":   "/ws/fit-agent/TRAINING-PLAN.md",
-		"ReadmePath":         "/ws/fit-agent/README.md",
-		"SkillsDir":          "/ws/skills",
-		"PointerPath":        "/ws/.fit-agent.toml",
+		"FitAgentDir":        filepath.FromSlash("/ws/fit-agent"),
+		"ActivitiesDir":      filepath.FromSlash("/ws/fit-agent/activities"),
+		"WellnessDir":        filepath.FromSlash("/ws/fit-agent/wellness"),
+		"PlannedWorkoutsDir": filepath.FromSlash("/ws/fit-agent/planned-workouts"),
+		"CacheDir":           filepath.FromSlash("/ws/fit-agent/.cache"),
+		"CacheActivitiesDir": filepath.FromSlash("/ws/fit-agent/.cache/activities"),
+		"CacheWellnessDir":   filepath.FromSlash("/ws/fit-agent/.cache/wellness"),
+		"CacheEventsDir":     filepath.FromSlash("/ws/fit-agent/.cache/events"),
+		"CacheAthletePath":   filepath.FromSlash("/ws/fit-agent/.cache/athlete.json"),
+		"AthleteProfilePath": filepath.FromSlash("/ws/fit-agent/ATHLETE-PROFILE.md"),
+		"TrainingPlanPath":   filepath.FromSlash("/ws/fit-agent/TRAINING-PLAN.md"),
+		"ReadmePath":         filepath.FromSlash("/ws/fit-agent/README.md"),
+		"SkillsDir":          filepath.FromSlash("/ws/skills"),
+		"PointerPath":        filepath.FromSlash("/ws/.fit-agent.toml"),
 	}
 	for k, got := range cases {
 		if got != want[k] {
@@ -51,27 +53,28 @@ func TestLayoutPaths(t *testing.T) {
 }
 
 func TestLayoutDatedPaths(t *testing.T) {
-	l := New("/ws")
+	root := filepath.FromSlash("/ws")
+	l := New(root)
 	d := time.Date(2026, 5, 3, 7, 30, 0, 0, time.UTC)
-	if got, want := l.ActivityDayPath(d), "/ws/fit-agent/activities/2026-05-03.yaml"; got != want {
+	if got, want := l.ActivityDayPath(d), filepath.FromSlash("/ws/fit-agent/activities/2026-05-03.yaml"); got != want {
 		t.Errorf("ActivityDayPath = %q, want %q", got, want)
 	}
-	if got, want := l.WellnessMonthPath(d), "/ws/fit-agent/wellness/2026-05.yaml"; got != want {
+	if got, want := l.WellnessMonthPath(d), filepath.FromSlash("/ws/fit-agent/wellness/2026-05.yaml"); got != want {
 		t.Errorf("WellnessMonthPath = %q, want %q", got, want)
 	}
-	if got, want := l.PlannedWorkoutDayPath(d), "/ws/fit-agent/planned-workouts/2026-05-03.md"; got != want {
+	if got, want := l.PlannedWorkoutDayPath(d), filepath.FromSlash("/ws/fit-agent/planned-workouts/2026-05-03.md"); got != want {
 		t.Errorf("PlannedWorkoutDayPath = %q, want %q", got, want)
 	}
-	if got, want := l.CacheActivityJSONPath("i12345"), "/ws/fit-agent/.cache/activities/i12345.json"; got != want {
+	if got, want := l.CacheActivityJSONPath("i12345"), filepath.FromSlash("/ws/fit-agent/.cache/activities/i12345.json"); got != want {
 		t.Errorf("CacheActivityJSONPath = %q, want %q", got, want)
 	}
-	if got, want := l.CacheActivityFITPath("i12345"), "/ws/fit-agent/.cache/activities/i12345.fit"; got != want {
+	if got, want := l.CacheActivityFITPath("i12345"), filepath.FromSlash("/ws/fit-agent/.cache/activities/i12345.fit"); got != want {
 		t.Errorf("CacheActivityFITPath = %q, want %q", got, want)
 	}
-	if got, want := l.CacheWellnessMonthPath(d), "/ws/fit-agent/.cache/wellness/2026-05.json"; got != want {
+	if got, want := l.CacheWellnessMonthPath(d), filepath.FromSlash("/ws/fit-agent/.cache/wellness/2026-05.json"); got != want {
 		t.Errorf("CacheWellnessMonthPath = %q, want %q", got, want)
 	}
-	if got, want := l.CacheEventPath("i999"), "/ws/fit-agent/.cache/events/i999.json"; got != want {
+	if got, want := l.CacheEventPath("i999"), filepath.FromSlash("/ws/fit-agent/.cache/events/i999.json"); got != want {
 		t.Errorf("CacheEventPath = %q, want %q", got, want)
 	}
 }
@@ -111,8 +114,10 @@ func TestAtomicWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != DefaultFileMode {
-		t.Errorf("mode = %v, want %v", st.Mode().Perm(), DefaultFileMode)
+	if runtime.GOOS != "windows" {
+		if st.Mode().Perm() != DefaultFileMode {
+			t.Errorf("mode = %v, want %v", st.Mode().Perm(), DefaultFileMode)
+		}
 	}
 	// no leftover temp file
 	entries, _ := os.ReadDir(filepath.Dir(target))
@@ -151,24 +156,25 @@ func TestAtomicWriteFromStream(t *testing.T) {
 }
 
 func TestClassify(t *testing.T) {
-	l := New("/ws")
+	root := filepath.FromSlash("/ws")
+	l := New(root)
 	cases := []struct {
 		path string
 		want Owner
 	}{
-		{"/ws/fit-agent/activities/2026-05-03.yaml", OwnerMachine},
-		{"/ws/fit-agent/wellness/2026-05.yaml", OwnerMachine},
-		{"/ws/fit-agent/.cache/activities/i1.json", OwnerMachine},
-		{"/ws/fit-agent/.cache/athlete.json", OwnerMachine},
-		{"/ws/fit-agent/planned-workouts/2026-05-04.md", OwnerShared},
-		{"/ws/fit-agent/ATHLETE-PROFILE.md", OwnerAgent},
-		{"/ws/fit-agent/TRAINING-PLAN.md", OwnerAgent},
-		{"/ws/fit-agent/README.md", OwnerAgent},
-		{"/ws/skills/training-plan-coach/SKILL.md", OwnerAgent},
-		{"/ws/.fit-agent.toml", OwnerAgent},
-		{"/ws/fit-agent/.gitignore", OwnerAgent},
-		{"/ws/random.txt", OwnerUnknown},
-		{"/somewhere/else/file", OwnerUnknown},
+		{filepath.FromSlash("/ws/fit-agent/activities/2026-05-03.yaml"), OwnerMachine},
+		{filepath.FromSlash("/ws/fit-agent/wellness/2026-05.yaml"), OwnerMachine},
+		{filepath.FromSlash("/ws/fit-agent/.cache/activities/i1.json"), OwnerMachine},
+		{filepath.FromSlash("/ws/fit-agent/.cache/athlete.json"), OwnerMachine},
+		{filepath.FromSlash("/ws/fit-agent/planned-workouts/2026-05-04.md"), OwnerShared},
+		{filepath.FromSlash("/ws/fit-agent/ATHLETE-PROFILE.md"), OwnerAgent},
+		{filepath.FromSlash("/ws/fit-agent/TRAINING-PLAN.md"), OwnerAgent},
+		{filepath.FromSlash("/ws/fit-agent/README.md"), OwnerAgent},
+		{filepath.FromSlash("/ws/skills/training-plan-coach/SKILL.md"), OwnerAgent},
+		{filepath.FromSlash("/ws/.fit-agent.toml"), OwnerAgent},
+		{filepath.FromSlash("/ws/fit-agent/.gitignore"), OwnerAgent},
+		{filepath.FromSlash("/ws/random.txt"), OwnerUnknown},
+		{filepath.FromSlash("/somewhere/else/file"), OwnerUnknown},
 	}
 	for _, tc := range cases {
 		if got := l.Classify(tc.path); got != tc.want {
@@ -178,13 +184,14 @@ func TestClassify(t *testing.T) {
 }
 
 func TestGuardWrite(t *testing.T) {
-	l := New("/ws")
+	root := filepath.FromSlash("/ws")
+	l := New(root)
 	// machine writer can write a machine file
-	if err := l.GuardWrite("/ws/fit-agent/activities/x.yaml", OwnerMachine); err != nil {
+	if err := l.GuardWrite(filepath.FromSlash("/ws/fit-agent/activities/x.yaml"), OwnerMachine); err != nil {
 		t.Errorf("machine writing machine path: unexpected err %v", err)
 	}
 	// machine writer cannot write an agent file
-	err := l.GuardWrite("/ws/fit-agent/ATHLETE-PROFILE.md", OwnerMachine)
+	err := l.GuardWrite(filepath.FromSlash("/ws/fit-agent/ATHLETE-PROFILE.md"), OwnerMachine)
 	if err == nil {
 		t.Fatalf("expected ownership error")
 	}
@@ -199,14 +206,14 @@ func TestGuardWrite(t *testing.T) {
 		t.Errorf("OwnershipError fields: %+v", oe)
 	}
 	// shared path accepts both
-	if err := l.GuardWrite("/ws/fit-agent/planned-workouts/d.md", OwnerMachine); err != nil {
+	if err := l.GuardWrite(filepath.FromSlash("/ws/fit-agent/planned-workouts/d.md"), OwnerMachine); err != nil {
 		t.Errorf("machine writing shared: %v", err)
 	}
-	if err := l.GuardWrite("/ws/fit-agent/planned-workouts/d.md", OwnerShared); err != nil {
+	if err := l.GuardWrite(filepath.FromSlash("/ws/fit-agent/planned-workouts/d.md"), OwnerShared); err != nil {
 		t.Errorf("shared writing shared: %v", err)
 	}
 	// unknown paths rejected
-	if err := l.GuardWrite("/ws/random.txt", OwnerMachine); err == nil {
+	if err := l.GuardWrite(filepath.FromSlash("/ws/random.txt"), OwnerMachine); err == nil {
 		t.Errorf("expected ownership error for unknown path")
 	}
 }

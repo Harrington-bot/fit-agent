@@ -73,7 +73,7 @@ func TestInitNonInteractiveScaffolds(t *testing.T) {
 		layout.AthleteProfilePath(),
 		layout.ReadmePath(),
 		layout.PointerPath(),
-		filepath.Join(wsDir, ".gitignore"),
+		filepath.Join(wsDir, "fit-agent", ".gitignore"),
 		filepath.Join(layout.SkillsDir(), "training-plan-coach", "SKILL.md"),
 		filepath.Join(layout.SkillsDir(), "training-session-coach", "SKILL.md"),
 		filepath.Join(layout.SkillsDir(), "workout-builder", "SKILL.md"),
@@ -110,6 +110,9 @@ func TestInitIdempotentKeepsExistingAgentFiles(t *testing.T) {
 	layout := workspace.New(wsDir)
 
 	want := []byte("# my hand-edited profile\n")
+	if err := os.MkdirAll(filepath.Dir(layout.AthleteProfilePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(layout.AthleteProfilePath(), want, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +140,9 @@ func TestInitForceOverwrites(t *testing.T) {
 	wsDir := t.TempDir()
 	layout := workspace.New(wsDir)
 
+	if err := os.MkdirAll(filepath.Dir(layout.AthleteProfilePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(layout.AthleteProfilePath(), []byte("STALE\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

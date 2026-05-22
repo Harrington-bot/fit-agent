@@ -4,16 +4,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestPathRespectsXDG(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
+	xdg := filepath.FromSlash("/tmp/xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
 	got, err := Path()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "/tmp/xdg/fit-agent/config.toml"
+	want := filepath.Join(xdg, "fit-agent", "config.toml")
 	if got != want {
 		t.Errorf("Path() = %q, want %q", got, want)
 	}
@@ -21,12 +23,17 @@ func TestPathRespectsXDG(t *testing.T) {
 
 func TestPathFallsBackToHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", "/tmp/home")
+	home := filepath.FromSlash("/tmp/home")
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
 	got, err := Path()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "/tmp/home/.config/fit-agent/config.toml"
+	want := filepath.Join(home, ".config", "fit-agent", "config.toml")
 	if got != want {
 		t.Errorf("Path() = %q, want %q", got, want)
 	}
@@ -55,8 +62,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("file mode = %o, want 0600", mode)
+	if runtime.GOOS != "windows" {
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Errorf("file mode = %o, want 0600", mode)
+		}
 	}
 
 	out, err := LoadFrom(path)
