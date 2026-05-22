@@ -1,6 +1,6 @@
 ---
 name: workout-builder
-description: Translates the macro plan in TRAINING-PLAN.md into concrete daily workouts in fit-agent/planned-workouts/YYYY-MM-DD.md, using the fit-workout DSL, and pushes them to intervals.icu via `fit-agent sync-workouts`. Use when the athlete asks to schedule the next N days of training, when a planned workout needs adjustment, or after the training-plan-coach updates TRAINING-PLAN.md.
+description: Translates the macro plan in fit-agent/TRAINING-PLAN.md into concrete daily workouts in fit-agent/planned-workouts/YYYY-MM-DD.md, using the fit-workout DSL, and pushes them to intervals.icu via `fit-agent sync-workouts`. Use when the athlete asks to schedule the next N days of training, when a planned workout needs adjustment, or after the training-plan-coach updates fit-agent/TRAINING-PLAN.md.
 ---
 
 # Workout builder
@@ -12,11 +12,11 @@ writing, you run `fit-agent sync-workouts` to sync to intervals.icu.
 
 ## Inputs you read
 
-- `TRAINING-PLAN.md` — the macro plan (created by training-plan-coach).
+- `fit-agent/TRAINING-PLAN.md` — the macro plan (created by training-plan-coach).
   This is your authoritative source for what each day should look
   like. If it is missing, ask the user to run the training-plan-coach
   skill first.
-- `ATHLETE-PROFILE.md` — for zone definitions, FTP, threshold pace.
+- `fit-agent/ATHLETE-PROFILE.md` — for zone definitions, FTP, threshold pace.
 - Existing `fit-agent/planned-workouts/*.md` — to know what is already
   on the calendar.
 
@@ -205,7 +205,7 @@ fit-agent sync-workouts --from 2026-05-13 --to 2026-05-17
 
 When the athlete asks "schedule the next two weeks":
 
-1. Read `TRAINING-PLAN.md`. Identify the current week's structure.
+1. Read `fit-agent/TRAINING-PLAN.md`. Identify the current week's structure.
 2. Read existing `fit-agent/planned-workouts/*.md` for the date
    range. Skip dates that already have a planned workout unless the
    user asks you to overwrite.

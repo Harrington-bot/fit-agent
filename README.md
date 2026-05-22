@@ -28,21 +28,21 @@ your agent does its thinking).
   80/20, Norwegian, etc.), build a multi-week plan, translate it into
   daily workouts, and push them to intervals.icu (and on to your device)
   with one command.
-- **Stays out of your way** — agent-owned files (`ATHLETE-PROFILE.md`,
-  `TRAINING-PLAN.md`, planned-workout intent) are never overwritten.
+- **Stays out of your way** — agent-owned files (`fit-agent/ATHLETE-PROFILE.md`,
+  `fit-agent/TRAINING-PLAN.md`, planned-workout intent) are never overwritten.
   Machine-owned data files are regenerated on every fetch.
 
 ## Workspace at a glance
 
 ```
 my-coaching/
-├── ATHLETE-PROFILE.md            # goals, history, constraints (you + agent)
-├── TRAINING-PLAN.md              # the plan the coach builds with you
 ├── skills/                       # OpenClaw coaching skills (bundled)
 │   ├── training-plan-coach/
 │   ├── workout-builder/
 │   └── training-session-coach/
 └── fit-agent/
+    ├── ATHLETE-PROFILE.md              # goals, history, constraints (you + agent)
+    ├── TRAINING-PLAN.md                # the plan the coach builds with you
     ├── activities/2026-05-03.yaml      # today's session(s), with laps
     ├── wellness/2026-05.yaml           # the month's daily wellness
     ├── planned-workouts/2026-05-04.md         # agent-authored workout

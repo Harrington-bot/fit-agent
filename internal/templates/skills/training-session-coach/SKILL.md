@@ -21,7 +21,7 @@ training-plan-coach's job).
   agent-authored plan, and also check the machine-owned YAML block
   (between the `<!-- fit-agent:icu:begin -->` / `end` sentinels) for
   the live icu state, including any workouts authored elsewhere.
-- `TRAINING-PLAN.md` — the broader context. Where in the plan is the
+- `fit-agent/TRAINING-PLAN.md` — the broader context. Where in the plan is the
   athlete (build vs taper)?
 
 ## Decisions you can recommend
@@ -67,7 +67,7 @@ and push it.
 
 ## Don'ts
 
-- Do not change `TRAINING-PLAN.md`. Repeated daily adjustments
+- Do not change `fit-agent/TRAINING-PLAN.md`. Repeated daily adjustments
   signal the macro plan needs revisiting; flag that to the athlete
   rather than papering over.
 - Do not invent wellness data. If HRV/RHR is missing for the day,
