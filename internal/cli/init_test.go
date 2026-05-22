@@ -46,8 +46,8 @@ func newScaffoldOpts(t *testing.T, srvURL, wsDir string, force bool) *initOption
 		NonInteractive: true,
 		Force:          force,
 	}
-	if err := opts.resolveDefaults(); err != nil {
-		t.Fatalf("resolveDefaults: %v", err)
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatalf("resolveWorkspaceDir: %v", err)
 	}
 	if err := opts.validateAPIKey(context.Background()); err != nil {
 		t.Fatalf("validateAPIKey: %v", err)
@@ -201,6 +201,89 @@ func TestApplyEnvHonorsAPIKeyEnv(t *testing.T) {
 	}
 	if opts.APIKey != "from-env" {
 		t.Errorf("want APIKey=from-env, got %q", opts.APIKey)
+	}
+}
+
+func TestResolveWorkspaceDirTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+	opts := &initOptions{WorkspaceDir: "~/my-workspace"}
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, "my-workspace")
+	if opts.WorkspaceDir != want {
+		t.Errorf("tilde expansion: got %q, want %q", opts.WorkspaceDir, want)
+	}
+}
+
+func TestResolveWorkspaceDirTildeOnly(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+	opts := &initOptions{WorkspaceDir: "~"}
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatal(err)
+	}
+	if opts.WorkspaceDir != home {
+		t.Errorf("bare tilde: got %q, want %q", opts.WorkspaceDir, home)
+	}
+}
+
+func TestResolveWorkspaceDirExpandsUnixEnv(t *testing.T) {
+	t.Setenv("MY_TEST_DIR", "/tmp/test-ws")
+	opts := &initOptions{WorkspaceDir: "$MY_TEST_DIR/sub"}
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(opts.WorkspaceDir, "test-ws") || !strings.HasSuffix(opts.WorkspaceDir, "sub") {
+		t.Errorf("unix env expansion: got %q", opts.WorkspaceDir)
+	}
+}
+
+func TestResolveWorkspaceDirExpandsWindowsEnv(t *testing.T) {
+	t.Setenv("MY_WIN_DIR", "C:\\Users\\test")
+	opts := &initOptions{WorkspaceDir: "%MY_WIN_DIR%\\.openclaw"}
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(opts.WorkspaceDir, "test") {
+		t.Errorf("windows env expansion: got %q", opts.WorkspaceDir)
+	}
+}
+
+func TestResolveWorkspaceDirAbsolutePath(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "workspace")
+	opts := &initOptions{WorkspaceDir: abs}
+	if err := opts.resolveWorkspaceDir(); err != nil {
+		t.Fatal(err)
+	}
+	if opts.WorkspaceDir != abs {
+		t.Errorf("absolute path changed: got %q, want %q", opts.WorkspaceDir, abs)
+	}
+}
+
+func TestExpandWindowsEnvNoPercents(t *testing.T) {
+	if got := expandWindowsEnv("plain-string"); got != "plain-string" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExpandWindowsEnvSinglePercent(t *testing.T) {
+	if got := expandWindowsEnv("50% done"); got != "50% done" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExpandWindowsEnvMultipleVars(t *testing.T) {
+	t.Setenv("A", "hello")
+	t.Setenv("B", "world")
+	got := expandWindowsEnv("%A%-%B%")
+	if got != "hello-world" {
+		t.Errorf("got %q, want %q", got, "hello-world")
 	}
 }
 

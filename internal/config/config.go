@@ -17,8 +17,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// DefaultProfile is the profile name used when nothing is specified.
-const DefaultProfile = "default"
+const (
+	// DefaultProfile is the profile name used when nothing is specified.
+	DefaultProfile          = "default"
+	DefaultWorkspace        = "~/.openclaw/workspace"
+	DefaultWorkspaceWindows = "%USERPROFILE%\\.openclaw\\workspace"
+)
 
 // EnvProfile is the environment variable that overrides the profile.
 const EnvProfile = "FIT_AGENT_PROFILE"

@@ -1,7 +1,7 @@
 // Package cli — `fit-agent init` command.
 //
 // init scaffolds a new workspace and stores per-user configuration. It
-// is the first command a user runs.
+// should be the first command a user runs.
 //
 // Behavior:
 //
@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ flags + --non-interactive for scripting.`,
 			return runInit(cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.WorkspaceDir, "workspace", "", "workspace directory (default: $PWD)")
+	cmd.Flags().StringVar(&opts.WorkspaceDir, "workspace", "", "workspace directory (default: ~/.openclaw/workspace)")
 	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "intervals.icu API key (or "+EnvAPIKey+")")
 	cmd.Flags().StringVar(&opts.ProfileName, "profile-name", config.DefaultProfile, "configuration profile name")
 	cmd.Flags().BoolVar(&opts.NonInteractive, "non-interactive", false, "take all values from flags; never prompt")
@@ -95,9 +96,6 @@ func runInit(cmd *cobra.Command, opts *initOptions) error {
 	dryRun, _ := cmd.Root().PersistentFlags().GetBool("dry-run")
 
 	if err := opts.applyEnv(); err != nil {
-		return err
-	}
-	if err := opts.resolveDefaults(); err != nil {
 		return err
 	}
 
@@ -158,25 +156,50 @@ func (opts *initOptions) applyEnv() error {
 	return nil
 }
 
-// resolveDefaults fills in WorkspaceDir from $PWD when empty and
-// canonicalizes the value to an absolute path.
-func (opts *initOptions) resolveDefaults() error {
-	if opts.WorkspaceDir == "" {
-		wd, err := os.Getwd()
+// resolveWorkspaceDir expands ~ and environment variables in WorkspaceDir,
+// then resolves it to an absolute path.
+func (opts *initOptions) resolveWorkspaceDir() error {
+	p := opts.WorkspaceDir
+
+	// Expand $VAR / ${VAR} style (Unix)
+	p = os.ExpandEnv(p)
+
+	// Expand %VAR% style (Windows)
+	p = expandWindowsEnv(p)
+
+	// Expand leading ~
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
+			return fmt.Errorf("resolve home dir: %w", err)
 		}
-		opts.WorkspaceDir = wd
+		p = filepath.Join(home, p[1:])
 	}
-	abs, err := filepath.Abs(opts.WorkspaceDir)
+
+	abs, err := filepath.Abs(p)
 	if err != nil {
-		return fmt.Errorf("abs(%s): %w", opts.WorkspaceDir, err)
+		return fmt.Errorf("abs(%s): %w", p, err)
 	}
 	opts.WorkspaceDir = abs
-	if opts.ProfileName == "" {
-		opts.ProfileName = config.DefaultProfile
-	}
 	return nil
+}
+
+// expandWindowsEnv replaces %VAR% substrings with their environment values.
+func expandWindowsEnv(s string) string {
+	for {
+		start := strings.Index(s, "%")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s[start+1:], "%")
+		if end == -1 {
+			break
+		}
+		end += start + 1
+		varName := s[start+1 : end]
+		s = s[:start] + os.Getenv(varName) + s[end+1:]
+	}
+	return s
 }
 
 // runForm prompts for any unset values via huh. It only prompts for
@@ -185,11 +208,18 @@ func (opts *initOptions) resolveDefaults() error {
 func (opts *initOptions) runForm() error {
 	groups := []*huh.Group{}
 
+	fmt.Println("Workspace path: ", opts.WorkspaceDir)
 	if opts.WorkspaceDir == "" {
+		// set default based on os
+		if runtime.GOOS == "windows" {
+			opts.WorkspaceDir = config.DefaultWorkspaceWindows
+		} else {
+			opts.WorkspaceDir = config.DefaultWorkspace
+		}
 		groups = append(groups, huh.NewGroup(
 			huh.NewInput().
 				Title("Workspace directory").
-				Description("Where should the agent-facing files live?").
+				Description("Where is OpenClaw's workspace located?").
 				Value(&opts.WorkspaceDir).
 				Validate(func(s string) error {
 					if strings.TrimSpace(s) == "" {
@@ -230,7 +260,7 @@ func (opts *initOptions) runForm() error {
 		return fmt.Errorf("interactive prompt: %w", err)
 	}
 	// Re-canonicalize workspace dir in case the user typed a relative path.
-	return opts.resolveDefaults()
+	return opts.resolveWorkspaceDir()
 }
 
 // validateAPIKey calls /athlete/0 to confirm the key works and to
