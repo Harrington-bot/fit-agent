@@ -111,15 +111,6 @@ func writeWellnessDay(b *bytes.Buffer, d icu.WellnessDay) {
 	if d.VO2Max > 0 {
 		fmt.Fprintf(b, "    vo2max: %s\n", formatFloat(d.VO2Max, 1))
 	}
-	if d.CTL > 0 {
-		fmt.Fprintf(b, "    ctl: %s\n", formatFloat(d.CTL, 1))
-	}
-	if d.ATL > 0 {
-		fmt.Fprintf(b, "    atl: %s\n", formatFloat(d.ATL, 1))
-	}
-	if d.RampRate != 0 {
-		fmt.Fprintf(b, "    ramp_rate: %s\n", formatFloat(d.RampRate, 2))
-	}
 	if d.Comments != "" {
 		fmt.Fprintf(b, "    notes: %s\n", yamlBlockScalar(d.Comments, 4))
 	}
