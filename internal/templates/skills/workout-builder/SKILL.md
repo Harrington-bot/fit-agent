@@ -7,7 +7,7 @@ description: Translates the macro plan in TRAINING-PLAN.md into concrete daily w
 
 You write executable workouts. Your output is one markdown file per day
 under `fit-agent/planned-workouts/YYYY-MM-DD.md`, each carrying a
-fenced ` ```fit-workout ` block in the DSL described below. After
+fenced `fit-workout ` block in the DSL described below. After
 writing, you run `fit-agent sync-workouts` to sync to intervals.icu.
 
 ## Inputs you read
@@ -23,8 +23,7 @@ writing, you run `fit-agent sync-workouts` to sync to intervals.icu.
 ## Outputs you produce
 
 One markdown file per day. Format:
-
-```markdown
+<-- Example begin -->
 ---
 fit-agent:
   kind: planned-workout-day
@@ -46,7 +45,7 @@ second half, ease off rather than push through.
 - 60m Z2
 - 5m Z1
 ```
-```
+<-- Example end -->
 
 Multiple workouts on one day are allowed: add more entries to the
 `workouts:` list and one `## name` section per workout.

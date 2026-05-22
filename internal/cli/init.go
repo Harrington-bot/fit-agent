@@ -68,11 +68,11 @@ func newInitCmd() *cobra.Command {
 Writes (only files marked * are created if missing; existing files are
 kept as-is unless --force is set):
 
-  <workspace>/ATHLETE-PROFILE.md     *  agent-owned, edit freely
-  <workspace>/README.md              *  agent-owned overview
   <workspace>/skills/<name>/SKILL.md *  coaching skill prompts
   <workspace>/.fit-agent.toml        *  profile pointer, no secrets
-  <workspace>/.gitignore             *  excludes fit-agent/.cache/
+  <workspace>/fit-agent/ATHLETE-PROFILE.md     *  agent-owned, edit freely
+  <workspace>/fit-agent/README.md              *  agent-owned overview
+  <workspace>/fit-agent/.gitignore             *  excludes fit-agent/.cache/
   <workspace>/fit-agent/...             machine-owned data + cache dirs
   $XDG_CONFIG_HOME/fit-agent/config.toml mode 0600 (key in OS keyring)
 
@@ -208,7 +208,6 @@ func expandWindowsEnv(s string) string {
 func (opts *initOptions) runForm() error {
 	groups := []*huh.Group{}
 
-	fmt.Println("Workspace path: ", opts.WorkspaceDir)
 	if opts.WorkspaceDir == "" {
 		// set default based on os
 		if runtime.GOOS == "windows" {
@@ -313,7 +312,7 @@ func buildScaffoldPlan(l workspace.Layout, opts *initOptions) ([]scaffoldFile, e
 	plan = append(plan, scaffoldFile{Path: l.ReadmePath(), Content: readme})
 
 	plan = append(plan, scaffoldFile{
-		Path:    filepath.Join(l.Root, ".gitignore"),
+		Path:    filepath.Join(l.Root, "fit-agent", ".gitignore"),
 		Content: []byte(templates.Gitignore),
 	})
 	plan = append(plan, scaffoldFile{

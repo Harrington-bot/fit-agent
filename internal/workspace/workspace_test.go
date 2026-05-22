@@ -37,9 +37,9 @@ func TestLayoutPaths(t *testing.T) {
 		"CacheWellnessDir":   "/ws/fit-agent/.cache/wellness",
 		"CacheEventsDir":     "/ws/fit-agent/.cache/events",
 		"CacheAthletePath":   "/ws/fit-agent/.cache/athlete.json",
-		"AthleteProfilePath": "/ws/ATHLETE-PROFILE.md",
-		"TrainingPlanPath":   "/ws/TRAINING-PLAN.md",
-		"ReadmePath":         "/ws/README.md",
+		"AthleteProfilePath": "/ws/fit-agent/ATHLETE-PROFILE.md",
+		"TrainingPlanPath":   "/ws/fit-agent/TRAINING-PLAN.md",
+		"ReadmePath":         "/ws/fit-agent/README.md",
 		"SkillsDir":          "/ws/skills",
 		"PointerPath":        "/ws/.fit-agent.toml",
 	}
@@ -161,12 +161,12 @@ func TestClassify(t *testing.T) {
 		{"/ws/fit-agent/.cache/activities/i1.json", OwnerMachine},
 		{"/ws/fit-agent/.cache/athlete.json", OwnerMachine},
 		{"/ws/fit-agent/planned-workouts/2026-05-04.md", OwnerShared},
-		{"/ws/ATHLETE-PROFILE.md", OwnerAgent},
-		{"/ws/TRAINING-PLAN.md", OwnerAgent},
-		{"/ws/README.md", OwnerAgent},
+		{"/ws/fit-agent/ATHLETE-PROFILE.md", OwnerAgent},
+		{"/ws/fit-agent/TRAINING-PLAN.md", OwnerAgent},
+		{"/ws/fit-agent/README.md", OwnerAgent},
 		{"/ws/skills/training-plan-coach/SKILL.md", OwnerAgent},
 		{"/ws/.fit-agent.toml", OwnerAgent},
-		{"/ws/.gitignore", OwnerAgent},
+		{"/ws/fit-agent/.gitignore", OwnerAgent},
 		{"/ws/random.txt", OwnerUnknown},
 		{"/somewhere/else/file", OwnerUnknown},
 	}
@@ -184,7 +184,7 @@ func TestGuardWrite(t *testing.T) {
 		t.Errorf("machine writing machine path: unexpected err %v", err)
 	}
 	// machine writer cannot write an agent file
-	err := l.GuardWrite("/ws/ATHLETE-PROFILE.md", OwnerMachine)
+	err := l.GuardWrite("/ws/fit-agent/ATHLETE-PROFILE.md", OwnerMachine)
 	if err == nil {
 		t.Fatalf("expected ownership error")
 	}

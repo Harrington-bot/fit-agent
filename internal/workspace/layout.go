@@ -68,13 +68,13 @@ func (l Layout) CacheEventsDir() string { return l.Path("fit-agent", ".cache", "
 func (l Layout) CacheAthletePath() string { return l.Path("fit-agent", ".cache", "athlete.json") }
 
 // AthleteProfilePath is the agent-owned athlete profile markdown.
-func (l Layout) AthleteProfilePath() string { return l.Path("ATHLETE-PROFILE.md") }
+func (l Layout) AthleteProfilePath() string { return l.Path("fit-agent", "ATHLETE-PROFILE.md") }
 
 // TrainingPlanPath is the agent-owned training plan markdown.
-func (l Layout) TrainingPlanPath() string { return l.Path("TRAINING-PLAN.md") }
+func (l Layout) TrainingPlanPath() string { return l.Path("fit-agent", "TRAINING-PLAN.md") }
 
 // ReadmePath is the agent-owned workspace README.
-func (l Layout) ReadmePath() string { return l.Path("README.md") }
+func (l Layout) ReadmePath() string { return l.Path("fit-agent", "README.md") }
 
 // SkillsDir holds per-skill subdirectories.
 func (l Layout) SkillsDir() string { return l.Path("skills") }

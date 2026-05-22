@@ -143,11 +143,11 @@ func classifyRel(rel string) Owner {
 		return OwnerMachine
 	case strings.HasPrefix(rel, "skills/"):
 		return OwnerAgent
-	case rel == "ATHLETE-PROFILE.md",
-		rel == "TRAINING-PLAN.md",
-		rel == "README.md",
+	case rel == "fit-agent/ATHLETE-PROFILE.md",
+		rel == "fit-agent/TRAINING-PLAN.md",
+		rel == "fit-agent/README.md",
 		rel == ".fit-agent.toml",
-		rel == ".gitignore":
+		rel == "fit-agent/.gitignore":
 		return OwnerAgent
 	default:
 		return OwnerUnknown
