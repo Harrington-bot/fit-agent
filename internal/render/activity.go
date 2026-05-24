@@ -217,11 +217,41 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	if l.AvgPaceSecPerKm > 0 {
 		fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
 	}
-	if l.ElevationGain > 0 {
-		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(l.ElevationGain, 1))
+	// Elevation: prefer FIT lap message values (ground truth); fall back to
+	// record-stream computation via applyElevation when FIT values are zero.
+	var elevGain, elevLoss float64
+	if l.ElevationGain > 0 || l.ElevationLoss > 0 {
+		elevGain = l.ElevationGain
+		elevLoss = l.ElevationLoss
+	} else if len(records) > 0 && l.Distance > 0 {
+		// Find lap start distance: first record at or after l.StartLocal.
+		var lapStartDist float64
+		for _, r := range records {
+			if !r.Timestamp.Before(l.StartLocal) {
+				lapStartDist = r.Distance
+				break
+			}
+		}
+		lapEndDist := lapStartDist + l.Distance
+		// Collect records within this lap.
+		var lapRecs []fitparse.Record
+		for _, r := range records {
+			if r.Distance >= lapStartDist && r.Distance <= lapEndDist {
+				lapRecs = append(lapRecs, r)
+			}
+		}
+		if len(lapRecs) > 0 {
+			segs := []autoSplitSegment{{segment: 1, distanceM: l.Distance}}
+			applyElevation(segs, lapRecs, lapStartDist, l.Distance, lapEndDist, 0)
+			elevGain = segs[0].elevationGainM
+			elevLoss = segs[0].elevationLossM
+		}
 	}
-	if l.ElevationLoss > 0 {
-		fmt.Fprintf(b, "    elevation_loss_m: %s\n", formatFloat(l.ElevationLoss, 1))
+	if elevGain > 0 {
+		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(elevGain, 1))
+	}
+	if elevLoss > 0 {
+		fmt.Fprintf(b, "    elevation_loss_m: %s\n", formatFloat(elevLoss, 1))
 	}
 	if l.Calories > 0 {
 		fmt.Fprintf(b, "    calories: %d\n", l.Calories)
