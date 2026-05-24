@@ -1,6 +1,7 @@
 package render
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestAutoSplitLap_ExactDivisible(t *testing.T) {
 		AvgCadence:      80,
 		AvgPaceSecPerKm: 330,
 	}
-	segs := autoSplitLap(l, 1000, nil) // nil records → fallback
+	segs := autoSplitLap(l, 1000, nil, 0, 0) // nil records → fallback
 	if len(segs) != 10 {
 		t.Fatalf("expected 10 segments, got %d", len(segs))
 	}
@@ -47,7 +48,7 @@ func TestAutoSplitLap_RemainderTail(t *testing.T) {
 		Distance:  10500.0,
 		Duration:  58 * time.Minute,
 	}
-	segs := autoSplitLap(l, 1000, nil)
+	segs := autoSplitLap(l, 1000, nil, 0, 0)
 	if len(segs) != 11 {
 		t.Fatalf("expected 11 segments (10 + remainder), got %d", len(segs))
 	}
@@ -64,7 +65,7 @@ func TestAutoSplitLap_SubThreshold(t *testing.T) {
 		Distance:  800.0,
 		Duration:  3 * time.Minute,
 	}
-	segs := autoSplitLap(l, 1000, nil)
+	segs := autoSplitLap(l, 1000, nil, 0, 0)
 	if len(segs) != 0 {
 		t.Errorf("expected no segments for sub-threshold lap, got %d", len(segs))
 	}
@@ -77,7 +78,7 @@ func TestAutoSplitLap_NonActiveNotSplit(t *testing.T) {
 		Distance:  5000.0,
 		Duration:  30 * time.Minute,
 	}
-	segs := autoSplitLap(l, 1000, nil)
+	segs := autoSplitLap(l, 1000, nil, 0, 0)
 	if len(segs) != 0 {
 		t.Errorf("expected no segments for non-active lap, got %d", len(segs))
 	}
@@ -167,5 +168,48 @@ func TestActivityDayYAML_AutoSplits_Disabled(t *testing.T) {
 	}
 	if strings.Contains(string(got), "auto_splits:") {
 		t.Error("expected no auto_splits block when disabled (autoSplitM=0)")
+	}
+}
+
+// TestAutoSplitLap_ElevationScaleInvariant verifies that the sum of per-segment
+// elevation_gain_m equals the lap's ElevationGain (and same for loss).
+func TestAutoSplitLap_ElevationScaleInvariant(t *testing.T) {
+	lapStart := time.Date(2024, 6, 1, 8, 0, 0, 0, time.UTC)
+	// Build records with altitude variation over a 3 km lap.
+	alts := []float64{100, 110, 108, 120, 115, 118, 100}
+	dists := []float64{0, 500, 1000, 1500, 2000, 2500, 3000}
+	var recs []fitparse.Record
+	for i, alt := range alts {
+		recs = append(recs, fitparse.Record{
+			Timestamp:     lapStart.Add(time.Duration(i*60) * time.Second),
+			Distance:      dists[i],
+			Altitude:      alt,
+			AltitudeValid: true,
+		})
+	}
+	l := fitparse.Lap{
+		Index:         1,
+		Intensity:     "active",
+		Distance:      3000.0,
+		Duration:      420 * time.Second,
+		StartLocal:    lapStart,
+		ElevationGain: 50.0,
+		ElevationLoss: 30.0,
+	}
+	segs := autoSplitLap(l, 1000, recs, 0, 0)
+	if len(segs) != 3 {
+		t.Fatalf("expected 3 segments, got %d", len(segs))
+	}
+	var totalGain, totalLoss float64
+	for _, s := range segs {
+		totalGain += s.elevationGainM
+		totalLoss += s.elevationLossM
+	}
+	const epsilon = 1e-9
+	if math.Abs(totalGain-l.ElevationGain) > epsilon {
+		t.Errorf("sum of segment gains = %.6f, want %.6f", totalGain, l.ElevationGain)
+	}
+	if math.Abs(totalLoss-l.ElevationLoss) > epsilon {
+		t.Errorf("sum of segment losses = %.6f, want %.6f", totalLoss, l.ElevationLoss)
 	}
 }

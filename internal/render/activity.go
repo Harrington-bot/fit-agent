@@ -165,7 +165,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	if len(a.FIT.Laps) > 0 {
 		b.WriteString("laps:\n")
 		for _, l := range a.FIT.Laps {
-			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg)
+			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg, a.FIT.ElevationGain, a.FIT.ElevationLoss)
 		}
 	}
 	if len(a.FIT.Intervals) > 0 {
@@ -176,7 +176,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	}
 }
 
-func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int) {
+func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int, sessionGain, sessionLoss float64) {
 	fmt.Fprintf(b, "  - i: %d\n", l.Index)
 	if l.Intensity != "" {
 		fmt.Fprintf(b, "    type: %s\n", yamlString(l.Intensity))
@@ -217,35 +217,13 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	if l.AvgPaceSecPerKm > 0 {
 		fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
 	}
-	// Elevation: prefer FIT lap message values (ground truth); fall back to
-	// record-stream computation via applyElevation when FIT values are zero.
+	// Elevation: prefer FIT lap message values (ground truth).
+	// When FIT elevation is zero, do NOT fall back to raw GPS records — GPS
+	// altitude without a FIT anchor produces unreliable totals. Omit instead.
 	var elevGain, elevLoss float64
 	if l.ElevationGain > 0 || l.ElevationLoss > 0 {
 		elevGain = l.ElevationGain
 		elevLoss = l.ElevationLoss
-	} else if len(records) > 0 && l.Distance > 0 {
-		// Find lap start distance: first record at or after l.StartLocal.
-		var lapStartDist float64
-		for _, r := range records {
-			if !r.Timestamp.Before(l.StartLocal) {
-				lapStartDist = r.Distance
-				break
-			}
-		}
-		lapEndDist := lapStartDist + l.Distance
-		// Collect records within this lap.
-		var lapRecs []fitparse.Record
-		for _, r := range records {
-			if r.Distance >= lapStartDist && r.Distance <= lapEndDist {
-				lapRecs = append(lapRecs, r)
-			}
-		}
-		if len(lapRecs) > 0 {
-			segs := []autoSplitSegment{{segment: 1, distanceM: l.Distance}}
-			applyElevation(segs, lapRecs, lapStartDist, l.Distance, lapEndDist, 0)
-			elevGain = segs[0].elevationGainM
-			elevLoss = segs[0].elevationLossM
-		}
 	}
 	if elevGain > 0 {
 		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(elevGain, 1))
@@ -271,7 +249,7 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	}
 	// Auto-splits: divide long unsegmented active laps into equal segments.
 	if autoSplitM > 0 && l.Distance > float64(autoSplitM) {
-		segs := autoSplitLap(l, autoSplitM, records)
+		segs := autoSplitLap(l, autoSplitM, records, sessionGain, sessionLoss)
 		if len(segs) > 1 {
 			b.WriteString("    auto_splits:\n")
 			for _, s := range segs {
@@ -345,7 +323,7 @@ type autoSplitSegment struct {
 // When records are absent or insufficient, falls back to proportional
 // approximation from the lap summary.
 // Only laps with intensity "active" are split; all others return nil.
-func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoSplitSegment {
+func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, sessionGain, sessionLoss float64) []autoSplitSegment {
 	if l.Intensity != "active" {
 		return nil
 	}
@@ -427,97 +405,106 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 		segs[i] = seg
 	}
 
-	// Elevation: run EWMA smoothing over the entire lap's altitude stream,
-	// then apply hysteresis on the smoothed values per segment.
-	// See docs/elevation-algorithm.md for rationale.
-	if len(lapRecs) > 0 {
-		applyElevation(segs, lapRecs, lapStartDist, float64(splitM), lapEndDist, n)
+	// Elevation: scale record-stream shape to match FIT lap totals.
+	// Fall back to session totals when lap totals are zero.
+	lapGain := l.ElevationGain
+	lapLoss := l.ElevationLoss
+	if lapGain == 0 && sessionGain > 0 {
+		lapGain = sessionGain
+	}
+	if lapLoss == 0 && sessionLoss > 0 {
+		lapLoss = sessionLoss
+	}
+
+	if len(lapRecs) > 0 && (lapGain > 0 || lapLoss > 0) {
+		rawGains := make([]float64, total)
+		rawLosses := make([]float64, total)
+		for i := 0; i < total; i++ {
+			segStart := lapStartDist + float64(i*splitM)
+			segEnd := segStart + float64(splitM)
+			if i == n {
+				segEnd = lapEndDist
+			}
+			rawGains[i], rawLosses[i] = rawElevFromRecords(lapRecs, segStart, segEnd)
+		}
+		scaleAndApplyElev(segs, rawGains, rawLosses, lapGain, lapLoss)
+	} else if lapGain > 0 || lapLoss > 0 {
+		// No records: distribute proportionally by distance.
+		for i := range segs {
+			frac := segs[i].distanceM / l.Distance
+			segs[i].elevationGainM = lapGain * frac
+			segs[i].elevationLossM = lapLoss * frac
+		}
 	}
 
 	return segs
 }
 
-// elevThresholds returns the hysteresis threshold in metres based on whether
-// the altitude data is barometric (more precise) or GPS-only (noisier).
-func elevThreshold(barometric bool) float64 {
-	if barometric {
-		return 2.0 // metres; matches Strava's barometric threshold
-	}
-	return 8.0 // metres; conservative for GPS-only altitude
-}
-
-// applyElevation computes per-segment elevation gain/loss using a two-step
-// algorithm: EWMA smoothing over the full lap, then per-segment hysteresis.
-// It writes directly into segs[].elevationGainM and segs[].elevationLossM.
-func applyElevation(segs []autoSplitSegment, lapRecs []fitparse.Record, lapStartDist, splitM, lapEndDist float64, n int) {
-	const ewmaAlpha = 0.1 // smoothing factor; lower = more smoothing
-
-	// Detect source type from first record with valid altitude.
-	barometric := false
-	for _, r := range lapRecs {
-		if r.AltitudeValid {
-			barometric = r.AltitudeIsBarometric
-			break
-		}
-	}
-	thresh := elevThreshold(barometric)
-
-	// Pass 1: EWMA smooth across the entire lap altitude stream.
-	// We keep a parallel slice of (distance, smoothedAlt) for bucketing.
-	type altPoint struct {
-		dist float64
-		alt  float64
-	}
-	var smoothed []altPoint
-	var ewma float64
-	ewmaInit := false
-	for _, r := range lapRecs {
+// rawElevFromRecords computes unscaled cumulative elevation gain/loss
+// for records within [segStart, segEnd] using simple 3 m hysteresis.
+// The returned values represent the relative shape of the elevation profile
+// and must be scaled to match FIT lap totals before use.
+func rawElevFromRecords(recs []fitparse.Record, segStart, segEnd float64) (gain, loss float64) {
+	const shapeHysteresis = 3.0
+	var committed float64
+	committedSet := false
+	for _, r := range recs {
 		if !r.AltitudeValid {
 			continue
 		}
-		if !ewmaInit {
-			ewma = r.Altitude
-			ewmaInit = true
-		} else {
-			ewma = ewmaAlpha*r.Altitude + (1-ewmaAlpha)*ewma
+		if r.Distance < segStart || r.Distance > segEnd {
+			continue
 		}
-		smoothed = append(smoothed, altPoint{dist: r.Distance, alt: ewma})
+		if !committedSet {
+			committed = r.Altitude
+			committedSet = true
+			continue
+		}
+		delta := r.Altitude - committed
+		if delta >= shapeHysteresis {
+			gain += delta
+			committed = r.Altitude
+		} else if delta <= -shapeHysteresis {
+			loss -= delta
+			committed = r.Altitude
+		}
 	}
-	if len(smoothed) < 2 {
-		return
+	return gain, loss
+}
+
+// scaleAndApplyElev scales rawGains/rawLosses so their sums equal lapGain/lapLoss,
+// then writes the results into segs[i].elevationGainM and elevationLossM.
+// When totalRawGain is zero but lapGain > 0, gain is distributed proportionally
+// by segment distance (same for loss).
+func scaleAndApplyElev(segs []autoSplitSegment, rawGains, rawLosses []float64, lapGain, lapLoss float64) {
+	var totalRawGain, totalRawLoss float64
+	for _, g := range rawGains {
+		totalRawGain += g
+	}
+	for _, l := range rawLosses {
+		totalRawLoss += l
 	}
 
-	// Pass 2: for each segment, apply hysteresis on its slice of smoothed values.
+	totalDist := 0.0
+	for _, s := range segs {
+		totalDist += s.distanceM
+	}
+
 	for i := range segs {
-		segStart := lapStartDist + float64(i)*splitM
-		segEnd := segStart + splitM
-		if i == n {
-			segEnd = lapEndDist
-		}
-
-		var gain, loss float64
-		var committed float64
-		committedSet := false
-		for _, p := range smoothed {
-			if p.dist < segStart || p.dist > segEnd {
-				continue
-			}
-			if !committedSet {
-				committed = p.alt
-				committedSet = true
-				continue
-			}
-			delta := p.alt - committed
-			if delta >= thresh {
-				gain += delta
-				committed = p.alt
-			} else if delta <= -thresh {
-				loss -= delta
-				committed = p.alt
+		if lapGain > 0 {
+			if totalRawGain > 0 {
+				segs[i].elevationGainM = rawGains[i] / totalRawGain * lapGain
+			} else if totalDist > 0 {
+				segs[i].elevationGainM = segs[i].distanceM / totalDist * lapGain
 			}
 		}
-		segs[i].elevationGainM = gain
-		segs[i].elevationLossM = loss
+		if lapLoss > 0 {
+			if totalRawLoss > 0 {
+				segs[i].elevationLossM = rawLosses[i] / totalRawLoss * lapLoss
+			} else if totalDist > 0 {
+				segs[i].elevationLossM = segs[i].distanceM / totalDist * lapLoss
+			}
+		}
 	}
 }
 

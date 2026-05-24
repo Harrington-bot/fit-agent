@@ -86,7 +86,8 @@ func TestGenuineLap_FITElevationUsedWhenPresent(t *testing.T) {
 }
 
 // TestGenuineLap_RecordStreamFallback checks that when FIT elevation is zero
-// but altitude records are present, the record-stream fallback is used.
+// and no FIT anchor exists, no elevation fields are emitted (raw GPS without
+// a FIT anchor is not trustworthy).
 func TestGenuineLap_RecordStreamFallback(t *testing.T) {
 	loc := mustLoadLocation(t, "Europe/London")
 	day := makeGenuineLapDay(loc, 0, 0, true)
@@ -95,14 +96,13 @@ func TestGenuineLap_RecordStreamFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := string(got)
-	// The altitude profile goes 100→110→120→115: gain should be detected
-	// by the EWMA+hysteresis algorithm (threshold=2m barometric).
-	if !strings.Contains(out, "elevation_gain_m:") {
-		t.Errorf("expected elevation_gain_m from record-stream fallback; got:\n%s", out)
+	// Without FIT lap elevation values, we should NOT emit elevation fields
+	// (raw GPS records alone are not a reliable source).
+	if strings.Contains(out, "elevation_gain_m:") {
+		t.Errorf("expected no elevation_gain_m when FIT lap elevation is zero; got:\n%s", out)
 	}
-	// Confirm fallback is used (gain should be non-zero, not equal to FIT value of 0).
-	if strings.Contains(out, "elevation_gain_m: 0") {
-		t.Errorf("elevation_gain_m should be non-zero from record-stream; got:\n%s", out)
+	if strings.Contains(out, "elevation_loss_m:") {
+		t.Errorf("expected no elevation_loss_m when FIT lap elevation is zero; got:\n%s", out)
 	}
 }
 
