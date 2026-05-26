@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/jogvan-k/fit-agent/internal/daterange"
+	"github.com/jogvan-k/fit-agent/internal/descriptionlint"
 	"github.com/jogvan-k/fit-agent/internal/icu"
 	"github.com/jogvan-k/fit-agent/internal/plannedio"
 	"github.com/jogvan-k/fit-agent/internal/workoutdsl"
@@ -132,6 +133,13 @@ func Plan(ctx context.Context, c Context, r daterange.Range) ([]Action, error) {
 			ev, err := buildEvent(day.Date, w)
 			if err != nil {
 				return nil, fmt.Errorf("%s/%s: %w", day.Path, w.Meta.Name, err)
+			}
+			// Lint the description and warn about any issues that would
+			// prevent ICU from projecting load for this workout.
+			if warnings := descriptionlint.Lint(ev.Description); len(warnings) > 0 {
+				for _, warn := range warnings {
+					c.logf("WARNING: %s (%s): %s", day.Path, ev.Name, warn)
+				}
 			}
 			var match *icu.Event
 			switch {
