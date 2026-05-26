@@ -49,7 +49,7 @@ func makeGenuineLapDay(
 				},
 				FIT: &fitparse.ParsedActivity{
 					HasBarometer: withAltRecords, // barometric when altitude records present
-					Records: records,
+					Records:      records,
 					Laps: []fitparse.Lap{
 						{
 							Index:         1,
