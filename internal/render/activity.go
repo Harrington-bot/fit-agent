@@ -20,6 +20,7 @@ package render
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -116,12 +117,24 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	if s.Distance > 0 {
 		fmt.Fprintf(b, "distance_m: %s\n", formatFloat(s.Distance, 1))
 	}
-	if s.TotalElevationGain > 0 {
-		fmt.Fprintf(b, "elevation_gain_m: %s\n", formatFloat(s.TotalElevationGain, 1))
+	// Elevation: prefer record-stream EWMA+hysteresis over raw ICU/Garmin GPS values,
+	// which accumulate GPS drift into phantom gain on flat terrain. ICU-sourced FIT
+	// files never contain DeviceInfo messages, so HasBarometer is always false; the
+	// 8m GPS threshold in applyElevation is the appropriate default.
+	var actElevGain, actElevLoss float64
+	if a.FIT != nil && len(a.FIT.Records) > 0 {
+		actElevGain, actElevLoss = computeActivityElevation(a.FIT.Records, a.FIT.HasBarometer)
+	} else {
+		actElevGain = s.TotalElevationGain
+		if a.FIT != nil {
+			actElevLoss = a.FIT.ElevationLoss
+		}
 	}
-	// Elevation loss comes from FIT session data when available.
-	if a.FIT != nil && a.FIT.ElevationLoss > 0 {
-		fmt.Fprintf(b, "elevation_loss_m: %s\n", formatFloat(a.FIT.ElevationLoss, 1))
+	if actElevGain > 0 {
+		fmt.Fprintf(b, "elevation_gain_m: %s\n", formatFloat(actElevGain, 1))
+	}
+	if actElevLoss > 0 {
+		fmt.Fprintf(b, "elevation_loss_m: %s\n", formatFloat(actElevLoss, 1))
 	}
 	if s.IcuTrainingLoad > 0 {
 		fmt.Fprintf(b, "tss: %s\n", formatFloat(s.IcuTrainingLoad, 1))
@@ -149,14 +162,22 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	} else {
 		b.WriteString("athlete_notes: \"\"\n")
 	}
+	if s.HasWeather {
+		writeWeather(b, s)
+	}
 
 	if a.FIT == nil {
 		return
 	}
+	// Wind direction for per-segment wind stats (nil when unavailable).
+	var windDeg *int
+	if s.HasWeather && s.PrevailingWindDeg != nil {
+		windDeg = s.PrevailingWindDeg
+	}
 	if len(a.FIT.Laps) > 0 {
 		b.WriteString("laps:\n")
 		for _, l := range a.FIT.Laps {
-			writeLap(b, l, loc, autoSplitM, a.FIT.Records)
+			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg, a.FIT.HasBarometer)
 		}
 	}
 	if len(a.FIT.Intervals) > 0 {
@@ -167,7 +188,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	}
 }
 
-func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record) {
+func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int, hasBarometer bool) {
 	fmt.Fprintf(b, "  - i: %d\n", l.Index)
 	if l.Intensity != "" {
 		fmt.Fprintf(b, "    type: %s\n", yamlString(l.Intensity))
@@ -208,18 +229,63 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	if l.AvgPaceSecPerKm > 0 {
 		fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
 	}
-	if l.ElevationGain > 0 {
-		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(l.ElevationGain, 1))
+	// Elevation: always compute from the record stream using EWMA+hysteresis.
+	// FIT lap TotalAscent/TotalDescent values are GPS-derived on most devices
+	// and accumulate noise just like the ICU session total; the record-stream
+	// algorithm filters that noise correctly.
+	var elevGain, elevLoss float64
+	if len(records) > 0 && l.Distance > 0 {
+		// Find lap start distance: first record at or after l.StartLocal.
+		var lapStartDist float64
+		for _, r := range records {
+			if !r.Timestamp.Before(l.StartLocal) {
+				lapStartDist = r.Distance
+				break
+			}
+		}
+		lapEndDist := lapStartDist + l.Distance
+		var lapRecs []fitparse.Record
+		for _, r := range records {
+			if r.Distance >= lapStartDist && r.Distance <= lapEndDist {
+				lapRecs = append(lapRecs, r)
+			}
+		}
+		if len(lapRecs) > 0 {
+			segs := []autoSplitSegment{{segment: 1, distanceM: l.Distance}}
+			applyElevation(segs, lapRecs, lapStartDist, l.Distance, lapEndDist, 0, hasBarometer)
+			elevGain = segs[0].elevationGainM
+			elevLoss = segs[0].elevationLossM
+		}
+	} else {
+		// No records — fall back to FIT lap message values.
+		elevGain = l.ElevationGain
+		elevLoss = l.ElevationLoss
 	}
-	if l.ElevationLoss > 0 {
-		fmt.Fprintf(b, "    elevation_loss_m: %s\n", formatFloat(l.ElevationLoss, 1))
+	if elevGain > 0 {
+		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(elevGain, 1))
+	}
+	if elevLoss > 0 {
+		fmt.Fprintf(b, "    elevation_loss_m: %s\n", formatFloat(elevLoss, 1))
 	}
 	if l.Calories > 0 {
 		fmt.Fprintf(b, "    calories: %d\n", l.Calories)
 	}
+	// Lap-level wind stats derived from GPS bearing vs activity wind direction.
+	if windDeg != nil && l.Distance > 0 {
+		var lapStartDist float64
+		for _, r := range records {
+			if !r.Timestamp.Before(l.StartLocal) {
+				lapStartDist = r.Distance
+				break
+			}
+		}
+		hw, tw := segmentWindPct(records, lapStartDist, lapStartDist+l.Distance, *windDeg)
+		fmt.Fprintf(b, "    headwind_pct: %s\n", formatFloat(hw, 1))
+		fmt.Fprintf(b, "    tailwind_pct: %s\n", formatFloat(tw, 1))
+	}
 	// Auto-splits: divide long unsegmented active laps into equal segments.
 	if autoSplitM > 0 && l.Distance > float64(autoSplitM) {
-		segs := autoSplitLap(l, autoSplitM, records)
+		segs := autoSplitLap(l, autoSplitM, records, hasBarometer)
 		if len(segs) > 1 {
 			b.WriteString("    auto_splits:\n")
 			for _, s := range segs {
@@ -247,6 +313,13 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 				if s.elevationLossM > 0 {
 					fmt.Fprintf(b, "        elevation_loss_m: %s\n", formatFloat(s.elevationLossM, 1))
 				}
+				// Per-segment wind stats from GPS bearing.
+				if windDeg != nil {
+					segStart := s.segStartDist
+					hw, tw := segmentWindPct(records, segStart, segStart+s.distanceM, *windDeg)
+					fmt.Fprintf(b, "        headwind_pct: %s\n", formatFloat(hw, 1))
+					fmt.Fprintf(b, "        tailwind_pct: %s\n", formatFloat(tw, 1))
+				}
 			}
 		}
 	}
@@ -269,6 +342,7 @@ func writeInterval(b *bytes.Buffer, iv fitparse.Interval) {
 // autoSplitSegment holds the derived stats for one implicit split segment.
 type autoSplitSegment struct {
 	segment         int
+	segStartDist    float64 // cumulative distance at segment start (metres)
 	distanceM       float64
 	durationS       int
 	avgPaceSecPerKm int
@@ -284,19 +358,25 @@ type autoSplitSegment struct {
 // the records whose cumulative distance falls within the segment's range.
 // When records are absent or insufficient, falls back to proportional
 // approximation from the lap summary.
-// Only laps with intensity "active" are split; all others return nil.
-func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoSplitSegment {
-	if l.Intensity != "active" {
-		return nil
-	}
+// All laps longer than splitM are split regardless of intensity, so that
+// easy/recovery laps from Garmin structured workouts (which carry intensity
+// "recovery" rather than "active") also receive per-km splits.
+func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBarometer bool) []autoSplitSegment {
 	if l.Distance <= 0 || splitM <= 0 {
 		return nil
 	}
+	const remainderTolerance = 20.0 // metres; remainder below this merges into last segment
+
 	n := int(l.Distance / float64(splitM))
 	remainder := l.Distance - float64(n)*float64(splitM)
 	total := n
+	mergeRemainder := false
 	if remainder > 0.5 {
-		total++
+		if remainder < remainderTolerance {
+			mergeRemainder = true // absorb remainder into last full segment
+		} else {
+			total++
+		}
 	}
 	if total < 2 {
 		return nil
@@ -332,17 +412,20 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 	for i := 0; i < total; i++ {
 		segStart := lapStartDist + float64(i*splitM)
 		segEnd := segStart + float64(splitM)
-		if i == n {
+		// Extend the last segment to cover any merged remainder
+		if i == total-1 && (mergeRemainder || i == n) {
 			segEnd = lapEndDist
 		}
 		dist := segEnd - segStart
 
 		var seg autoSplitSegment
 		seg.segment = i + 1
+		seg.segStartDist = segStart
 		seg.distanceM = dist
 
 		if len(lapRecs) > 0 {
 			seg = segStatsFromRecords(lapRecs, i+1, segStart, segEnd, dist)
+			seg.segStartDist = segStart
 		} else {
 			// Fallback: proportional from lap summary
 			frac := dist / l.Distance
@@ -353,6 +436,7 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 			}
 			seg = autoSplitSegment{
 				segment:         i + 1,
+				segStartDist:    segStart,
 				distanceM:       dist,
 				durationS:       durS,
 				avgPaceSecPerKm: pace,
@@ -368,7 +452,7 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record) []autoS
 	// then apply hysteresis on the smoothed values per segment.
 	// See docs/elevation-algorithm.md for rationale.
 	if len(lapRecs) > 0 {
-		applyElevation(segs, lapRecs, lapStartDist, float64(splitM), lapEndDist, n)
+		applyElevation(segs, lapRecs, lapStartDist, float64(splitM), lapEndDist, total-1, hasBarometer)
 	}
 
 	return segs
@@ -386,17 +470,39 @@ func elevThreshold(barometric bool) float64 {
 // applyElevation computes per-segment elevation gain/loss using a two-step
 // algorithm: EWMA smoothing over the full lap, then per-segment hysteresis.
 // It writes directly into segs[].elevationGainM and segs[].elevationLossM.
-func applyElevation(segs []autoSplitSegment, lapRecs []fitparse.Record, lapStartDist, splitM, lapEndDist float64, n int) {
-	const ewmaAlpha = 0.1 // smoothing factor; lower = more smoothing
-
-	// Detect source type from first record with valid altitude.
-	barometric := false
-	for _, r := range lapRecs {
+// computeActivityElevation computes session-level elevation gain/loss from the
+// full record stream using the same EWMA+hysteresis algorithm used for per-lap
+// and per-segment splits. This avoids using the raw ICU/Garmin GPS-derived total
+// which accumulates noise on flat terrain.
+func computeActivityElevation(records []fitparse.Record, hasBarometer bool) (gain, loss float64) {
+	if len(records) == 0 {
+		return 0, 0
+	}
+	var startDist, endDist float64
+	for _, r := range records {
 		if r.AltitudeValid {
-			barometric = r.AltitudeIsBarometric
+			startDist = r.Distance
 			break
 		}
 	}
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].AltitudeValid {
+			endDist = records[i].Distance
+			break
+		}
+	}
+	if endDist <= startDist {
+		return 0, 0
+	}
+	totalDist := endDist - startDist
+	segs := []autoSplitSegment{{segment: 1, distanceM: totalDist}}
+	applyElevation(segs, records, startDist, totalDist, endDist, 0, hasBarometer)
+	return segs[0].elevationGainM, segs[0].elevationLossM
+}
+
+func applyElevation(segs []autoSplitSegment, lapRecs []fitparse.Record, lapStartDist, splitM, lapEndDist float64, n int, barometric bool) {
+	const ewmaAlpha = 0.1 // smoothing factor; lower = more smoothing
+
 	thresh := elevThreshold(barometric)
 
 	// Pass 1: EWMA smooth across the entire lap altitude stream.
@@ -519,4 +625,127 @@ func segStatsFromRecords(recs []fitparse.Record, segment int, segStart, segEnd, 
 		seg.avgCadence = cadSum / cadCount
 	}
 	return seg
+}
+
+// writeWeather emits the weather: block for activities where has_weather is true.
+func writeWeather(b *bytes.Buffer, s icu.ActivitySummary) {
+	b.WriteString("weather:\n")
+	fmt.Fprintf(b, "  temp_c: %s\n", formatFloat(s.AvgWeatherTemp, 1))
+	fmt.Fprintf(b, "  feels_like_c: %s\n", formatFloat(s.AvgFeelsLike, 1))
+	fmt.Fprintf(b, "  condition: %s\n", weatherCondition(s.MaxRain, s.AvgClouds))
+	fmt.Fprintf(b, "  cloud_pct: %s\n", formatFloat(s.AvgClouds, 1))
+	fmt.Fprintf(b, "  rain_mm: %s\n", formatFloat(s.MaxRain, 1))
+	fmt.Fprintf(b, "  wind_speed_ms: %s\n", formatFloat(s.AvgWindSpeed, 1))
+	fmt.Fprintf(b, "  wind_gust_ms: %s\n", formatFloat(s.AvgWindGust, 1))
+	if s.PrevailingWindDeg != nil {
+		fmt.Fprintf(b, "  wind_dir_deg: %d\n", *s.PrevailingWindDeg)
+		fmt.Fprintf(b, "  wind_dir: %s\n", windDirection(*s.PrevailingWindDeg))
+	}
+	fmt.Fprintf(b, "  headwind_pct: %s\n", formatFloat(s.HeadwindPct, 1))
+	fmt.Fprintf(b, "  tailwind_pct: %s\n", formatFloat(s.TailwindPct, 1))
+}
+
+// weatherCondition derives a human-readable condition string from cloud cover and rain.
+func weatherCondition(rainMM, cloudPct float64) string {
+	if rainMM >= 5 {
+		return "Heavy Rain"
+	}
+	if rainMM > 0 {
+		return "Rain"
+	}
+	if cloudPct >= 90 {
+		return "Overcast"
+	}
+	if cloudPct >= 50 {
+		return "Cloudy"
+	}
+	if cloudPct >= 10 {
+		return "Partly Cloudy"
+	}
+	return "Clear"
+}
+
+// windDirection converts a bearing in degrees to a 16-point compass label.
+func windDirection(deg int) string {
+	dirs := []string{"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+		"S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"}
+	// Each sector is 22.5°; offset by half a sector so N is centred on 0°.
+	idx := int((float64(deg)+11.25)/22.5) % 16
+	return dirs[idx]
+}
+
+// segmentWindPct computes headwind and tailwind percentages for a segment
+// defined by [segStart, segEnd) metres of cumulative distance.
+// windFromDeg is the direction the wind is coming FROM (meteorological convention).
+// Returns (headwindPct, tailwindPct) in the range [0, 100].
+// Returns (0, 0) when GPS data is unavailable or insufficient.
+func segmentWindPct(records []fitparse.Record, segStart, segEnd float64, windFromDeg int) (headwind, tailwind float64) {
+	// Collect GPS points within this segment.
+	type pt struct{ lat, lon, dist float64 }
+	var pts []pt
+	for _, r := range records {
+		if !r.LatLonValid {
+			continue
+		}
+		if r.Distance >= segStart && r.Distance <= segEnd {
+			pts = append(pts, pt{r.Lat, r.Lon, r.Distance})
+		}
+	}
+	if len(pts) < 2 {
+		return 0, 0
+	}
+
+	// Wind is FROM windFromDeg; the wind vector points TO windFromDeg+180.
+	windToDeg := math.Mod(float64(windFromDeg+180), 360)
+
+	// Compute distance-weighted average wind component across consecutive GPS
+	// pairs. Each pair contributes cos(bearing - wind_to_deg) weighted by the
+	// distance between the two points, so 200m of headwind and 800m of tailwind
+	// produce a net result proportional to actual exposure rather than a mean
+	// bearing that can mask direction reversals.
+	var headwindSum, tailwindSum, totalDist float64
+	for i := 1; i < len(pts); i++ {
+		bearing := gpsBearing(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
+		pairDist := pts[i].dist - pts[i-1].dist
+		if pairDist <= 0 {
+			pairDist = haversineM(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon)
+		}
+		angle := (bearing - windToDeg) * math.Pi / 180
+		component := math.Cos(angle) // +1=tailwind, -1=headwind
+		if component > 0 {
+			tailwindSum += component * pairDist
+		} else {
+			headwindSum += -component * pairDist
+		}
+		totalDist += pairDist
+	}
+	if totalDist == 0 {
+		return 0, 0
+	}
+	headwind = math.Round(headwindSum/totalDist*100*10) / 10
+	tailwind = math.Round(tailwindSum/totalDist*100*10) / 10
+	return headwind, tailwind
+}
+
+// gpsBearing returns the initial bearing in degrees [0, 360) from (lat1, lon1)
+// to (lat2, lon2) using the forward azimuth formula.
+func gpsBearing(lat1, lon1, lat2, lon2 float64) float64 {
+	φ1 := lat1 * math.Pi / 180
+	φ2 := lat2 * math.Pi / 180
+	Δλ := (lon2 - lon1) * math.Pi / 180
+	y := math.Sin(Δλ) * math.Cos(φ2)
+	x := math.Cos(φ1)*math.Sin(φ2) - math.Sin(φ1)*math.Cos(φ2)*math.Cos(Δλ)
+	θ := math.Atan2(y, x) * 180 / math.Pi
+	return math.Mod(θ+360, 360)
+}
+
+// haversineM returns the great-circle distance in metres between two lat/lon points.
+func haversineM(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371000.0
+	φ1 := lat1 * math.Pi / 180
+	φ2 := lat2 * math.Pi / 180
+	Δφ := (lat2 - lat1) * math.Pi / 180
+	Δλ := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(Δφ/2)*math.Sin(Δφ/2) + math.Cos(φ1)*math.Cos(φ2)*math.Sin(Δλ/2)*math.Sin(Δλ/2)
+	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }

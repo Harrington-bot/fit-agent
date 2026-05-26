@@ -19,8 +19,10 @@ import (
 
 const (
 	// DefaultProfile is the profile name used when nothing is specified.
-	DefaultProfile          = "default"
-	DefaultWorkspace        = "~/.openclaw/workspace"
+	DefaultProfile = "default"
+	// DefaultWorkspace is the default workspace path on Unix-like systems.
+	DefaultWorkspace = "~/.openclaw/workspace"
+	// DefaultWorkspaceWindows is the default workspace path on Windows.
 	DefaultWorkspaceWindows = "%USERPROFILE%\\.openclaw\\workspace"
 )
 
