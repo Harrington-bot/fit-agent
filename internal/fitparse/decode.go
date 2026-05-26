@@ -186,8 +186,13 @@ func DecodeReader(r io.Reader) (*ParsedActivity, error) {
 			}
 		case typedef.MesgNumDeviceInfo:
 			di := mesgdef.NewDeviceInfo(m)
+			// ICU-sourced FIT files often omit DeviceInfo messages entirely;
+			// when present, detect the barometer by SourceType=local + DeviceType=barometer.
+			// Some Garmin firmware versions use DeviceType values outside the
+			// typedef enum, so also check the raw uint8 value (4 = barometer).
 			if di.SourceType == typedef.SourceTypeLocal &&
-				typedef.LocalDeviceType(di.DeviceType) == typedef.LocalDeviceTypeBarometer {
+				(typedef.LocalDeviceType(di.DeviceType) == typedef.LocalDeviceTypeBarometer ||
+					di.DeviceType == 4) {
 				out.HasBarometer = true
 			}
 		}

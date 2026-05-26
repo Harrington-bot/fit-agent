@@ -111,6 +111,9 @@ func TestAutoSplitLap_SubThreshold(t *testing.T) {
 }
 
 func TestAutoSplitLap_NonActiveNotSplit(t *testing.T) {
+	// Recovery laps are now split just like active laps so that easy/structured
+	// workout laps (which Garmin marks as "recovery" intensity) also get per-km
+	// splits. This test verifies that a long recovery lap does produce segments.
 	l := fitparse.Lap{
 		Index:     1,
 		Intensity: "recovery",
@@ -118,8 +121,8 @@ func TestAutoSplitLap_NonActiveNotSplit(t *testing.T) {
 		Duration:  30 * time.Minute,
 	}
 	segs := autoSplitLap(l, 1000, nil, false)
-	if len(segs) != 0 {
-		t.Errorf("expected no segments for non-active lap, got %d", len(segs))
+	if len(segs) != 5 {
+		t.Errorf("expected 5 segments for 5000m recovery lap at 1000m split, got %d", len(segs))
 	}
 }
 

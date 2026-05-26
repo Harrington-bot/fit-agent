@@ -117,12 +117,24 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	if s.Distance > 0 {
 		fmt.Fprintf(b, "distance_m: %s\n", formatFloat(s.Distance, 1))
 	}
-	if s.TotalElevationGain > 0 {
-		fmt.Fprintf(b, "elevation_gain_m: %s\n", formatFloat(s.TotalElevationGain, 1))
+	// Elevation: prefer record-stream EWMA+hysteresis over raw ICU/Garmin GPS values,
+	// which accumulate GPS drift into phantom gain on flat terrain. ICU-sourced FIT
+	// files never contain DeviceInfo messages, so HasBarometer is always false; the
+	// 8m GPS threshold in applyElevation is the appropriate default.
+	var actElevGain, actElevLoss float64
+	if a.FIT != nil && len(a.FIT.Records) > 0 {
+		actElevGain, actElevLoss = computeActivityElevation(a.FIT.Records, a.FIT.HasBarometer)
+	} else {
+		actElevGain = s.TotalElevationGain
+		if a.FIT != nil {
+			actElevLoss = a.FIT.ElevationLoss
+		}
 	}
-	// Elevation loss comes from FIT session data when available.
-	if a.FIT != nil && a.FIT.ElevationLoss > 0 {
-		fmt.Fprintf(b, "elevation_loss_m: %s\n", formatFloat(a.FIT.ElevationLoss, 1))
+	if actElevGain > 0 {
+		fmt.Fprintf(b, "elevation_gain_m: %s\n", formatFloat(actElevGain, 1))
+	}
+	if actElevLoss > 0 {
+		fmt.Fprintf(b, "elevation_loss_m: %s\n", formatFloat(actElevLoss, 1))
 	}
 	if s.IcuTrainingLoad > 0 {
 		fmt.Fprintf(b, "tss: %s\n", formatFloat(s.IcuTrainingLoad, 1))
@@ -217,13 +229,12 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	if l.AvgPaceSecPerKm > 0 {
 		fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
 	}
-	// Elevation: prefer FIT lap message values (ground truth); fall back to
-	// record-stream computation via applyElevation when FIT values are zero.
+	// Elevation: always compute from the record stream using EWMA+hysteresis.
+	// FIT lap TotalAscent/TotalDescent values are GPS-derived on most devices
+	// and accumulate noise just like the ICU session total; the record-stream
+	// algorithm filters that noise correctly.
 	var elevGain, elevLoss float64
-	if l.ElevationGain > 0 || l.ElevationLoss > 0 {
-		elevGain = l.ElevationGain
-		elevLoss = l.ElevationLoss
-	} else if len(records) > 0 && l.Distance > 0 {
+	if len(records) > 0 && l.Distance > 0 {
 		// Find lap start distance: first record at or after l.StartLocal.
 		var lapStartDist float64
 		for _, r := range records {
@@ -233,7 +244,6 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 			}
 		}
 		lapEndDist := lapStartDist + l.Distance
-		// Collect records within this lap.
 		var lapRecs []fitparse.Record
 		for _, r := range records {
 			if r.Distance >= lapStartDist && r.Distance <= lapEndDist {
@@ -241,11 +251,15 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 			}
 		}
 		if len(lapRecs) > 0 {
-				segs := []autoSplitSegment{{segment: 1, distanceM: l.Distance}}
-				applyElevation(segs, lapRecs, lapStartDist, l.Distance, lapEndDist, 0, hasBarometer)
-				elevGain = segs[0].elevationGainM
-				elevLoss = segs[0].elevationLossM
-			}
+			segs := []autoSplitSegment{{segment: 1, distanceM: l.Distance}}
+			applyElevation(segs, lapRecs, lapStartDist, l.Distance, lapEndDist, 0, hasBarometer)
+			elevGain = segs[0].elevationGainM
+			elevLoss = segs[0].elevationLossM
+		}
+	} else {
+		// No records — fall back to FIT lap message values.
+		elevGain = l.ElevationGain
+		elevLoss = l.ElevationLoss
 	}
 	if elevGain > 0 {
 		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(elevGain, 1))
@@ -344,11 +358,10 @@ type autoSplitSegment struct {
 // the records whose cumulative distance falls within the segment's range.
 // When records are absent or insufficient, falls back to proportional
 // approximation from the lap summary.
-// Only laps with intensity "active" are split; all others return nil.
+// All laps longer than splitM are split regardless of intensity, so that
+// easy/recovery laps from Garmin structured workouts (which carry intensity
+// "recovery" rather than "active") also receive per-km splits.
 func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBarometer bool) []autoSplitSegment {
-	if l.Intensity != "active" {
-		return nil
-	}
 	if l.Distance <= 0 || splitM <= 0 {
 		return nil
 	}
@@ -457,6 +470,36 @@ func elevThreshold(barometric bool) float64 {
 // applyElevation computes per-segment elevation gain/loss using a two-step
 // algorithm: EWMA smoothing over the full lap, then per-segment hysteresis.
 // It writes directly into segs[].elevationGainM and segs[].elevationLossM.
+// computeActivityElevation computes session-level elevation gain/loss from the
+// full record stream using the same EWMA+hysteresis algorithm used for per-lap
+// and per-segment splits. This avoids using the raw ICU/Garmin GPS-derived total
+// which accumulates noise on flat terrain.
+func computeActivityElevation(records []fitparse.Record, hasBarometer bool) (gain, loss float64) {
+	if len(records) == 0 {
+		return 0, 0
+	}
+	var startDist, endDist float64
+	for _, r := range records {
+		if r.AltitudeValid {
+			startDist = r.Distance
+			break
+		}
+	}
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].AltitudeValid {
+			endDist = records[i].Distance
+			break
+		}
+	}
+	if endDist <= startDist {
+		return 0, 0
+	}
+	totalDist := endDist - startDist
+	segs := []autoSplitSegment{{segment: 1, distanceM: totalDist}}
+	applyElevation(segs, records, startDist, totalDist, endDist, 0, hasBarometer)
+	return segs[0].elevationGainM, segs[0].elevationLossM
+}
+
 func applyElevation(segs []autoSplitSegment, lapRecs []fitparse.Record, lapStartDist, splitM, lapEndDist float64, n int, barometric bool) {
 	const ewmaAlpha = 0.1 // smoothing factor; lower = more smoothing
 
