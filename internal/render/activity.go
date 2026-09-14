@@ -506,9 +506,15 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBaro
 	if totalLapDistance <= 0 {
 		totalLapDistance = l.Distance
 	}
-	if lapGain == 0 && sessionGain > 0 { lapGain = sessionGain * l.Distance / totalLapDistance }
-	if lapLoss == 0 && sessionLoss > 0 { lapLoss = sessionLoss * l.Distance / totalLapDistance }
-	if lapGain > 0 || lapLoss > 0 { scaleElevationToTotals(segs, lapGain, lapLoss) }
+	if lapGain == 0 && sessionGain > 0 {
+		lapGain = sessionGain * l.Distance / totalLapDistance
+	}
+	if lapLoss == 0 && sessionLoss > 0 {
+		lapLoss = sessionLoss * l.Distance / totalLapDistance
+	}
+	if lapGain > 0 || lapLoss > 0 {
+		scaleElevationToTotals(segs, lapGain, lapLoss)
+	}
 
 	return segs
 }
@@ -628,8 +634,20 @@ func scaleElevationToTotals(segs []autoSplitSegment, totalGain, totalLoss float6
 		distance += seg.distanceM
 	}
 	for i := range segs {
-		if totalGain > 0 { if gainShape > 0 { segs[i].elevationGainM = totalGain * segs[i].elevationGainM / gainShape } else { segs[i].elevationGainM = totalGain * segs[i].distanceM / distance } }
-		if totalLoss > 0 { if lossShape > 0 { segs[i].elevationLossM = totalLoss * segs[i].elevationLossM / lossShape } else { segs[i].elevationLossM = totalLoss * segs[i].distanceM / distance } }
+		if totalGain > 0 {
+			if gainShape > 0 {
+				segs[i].elevationGainM = totalGain * segs[i].elevationGainM / gainShape
+			} else {
+				segs[i].elevationGainM = totalGain * segs[i].distanceM / distance
+			}
+		}
+		if totalLoss > 0 {
+			if lossShape > 0 {
+				segs[i].elevationLossM = totalLoss * segs[i].elevationLossM / lossShape
+			} else {
+				segs[i].elevationLossM = totalLoss * segs[i].distanceM / distance
+			}
+		}
 	}
 }
 
