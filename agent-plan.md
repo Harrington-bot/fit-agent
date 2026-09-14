@@ -70,6 +70,9 @@ This plan covers v1 only, with hooks for the post-v1 webhook service.
 7. **`ATHLETE-PROFILE.md` is agent-owned.** `init` writes a template with
    placeholders for goals, history, constraints, equipment, etc. The coach
    skills know to read and update it. `fetch` never touches it.
+   `sync-athlete-profile` is a narrow explicit exception: it updates only
+   recognised fitness-marker lines and a labelled last-synced timestamp,
+   preserving all other bytes.
 8. **Top-level file naming** follows OpenClaw convention
    (`ATHLETE-PROFILE.md`, like `SOUL.md` / `HEARTBEAT.md`). Subdirectories
    are lowercase kebab-case (`activities/`, `wellness/`, `planned-workouts/`).

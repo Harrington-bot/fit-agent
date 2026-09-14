@@ -1,136 +1,49 @@
-# Elevation Gain / Loss Algorithm
+# Auto-split elevation algorithm
 
-This document describes how fit-agent computes per-segment elevation gain and
-loss for auto-split segments. The same approach applies regardless of whether
-the altitude data comes from a barometric sensor (Garmin, Polar, Suunto) or
-from GPS-derived altitude (phone-based recording, GPS-only devices).
+Auto-split segment elevation is deliberately anchored to totals produced by
+the recording device. Raw GPS altitude is useful for *where* a route climbed
+or descended, but not for its absolute gain/loss: drift and vertical noise can
+make a flat route appear hilly.
 
----
+## Inputs and trust boundary
 
-## The Problem
-
-Raw altitude data from GPS and barometric sensors is noisy. A device recording
-at 1 Hz on a completely flat surface will still show ±1–3 m of altitude
-variation due to:
-
-- **GPS vertical noise** — GPS satellites are distributed horizontally, so
-  vertical accuracy is inherently worse than horizontal (~3–5× worse).
-- **Barometric drift** — atmospheric pressure changes with weather and
-  temperature; a barometer will drift even without any real elevation change.
-- **Sensor lock-on** — barometric sensors need a warm-up period. The first
-  30–60 seconds of a FIT record stream often show an apparent descent as the
-  sensor converges to the true ground-level pressure.
-
-If you naïvely sum every positive delta between consecutive records, a flat
-10 km run will appear to have 100–200 m of elevation gain. This is why
-Garmin, Strava, and other platforms all apply filtering before reporting
-totals.
-
----
+- FIT lap `TotalAscent` and `TotalDescent` are the authoritative totals when
+  present. Garmin and comparable devices apply their own sensor-aware filters.
+- FIT records provide only the relative climb/descent shape between segments.
+- A session total is used only when a lap has no corresponding total. It is
+  divided between laps in proportion to lap distance, then between the lap's
+  auto-splits. Raw record totals are never emitted as elevation values.
 
 ## Algorithm
 
-fit-agent uses a two-step approach applied to the per-second FIT record stream.
+For each auto-split lap:
 
-### Step 1 — EWMA Smoothing (whole lap)
+1. Collect valid altitude records belonging to each segment.
+2. Apply a 3 m hysteresis filter within each segment to obtain unscaled gain
+   and loss weights. This rejects small sensor fluctuations while retaining
+   the relative terrain shape.
+3. Scale positive segment gain weights to sum exactly to the lap's filtered
+   ascent total; scale loss weights independently to sum exactly to the lap's
+   filtered descent total.
+4. If no segment has a usable shape (or there are no records), distribute the
+   authoritative total by segment distance.
+5. If neither the lap nor session reports a total, omit auto-split elevation.
 
-An **Exponentially Weighted Moving Average** (EWMA) is applied across the
-entire lap's altitude stream before any bucketing into segments:
+Consequently, the displayed auto-split gain/loss sums to the FIT device total
+(up to normal one-decimal rendering), preventing GPS drift from being
+mistaken for climbing.
 
-```
-smoothed[0] = altitude[0]
-smoothed[i] = α × altitude[i] + (1 − α) × smoothed[i−1]
-```
+## Edge cases
 
-`α = 0.1` (smoothing factor). Each new sample contributes 10 % of the
-updated value; the previous smoothed estimate contributes 90 %. This
-suppresses high-frequency noise while preserving real terrain shape.
+- **No altitude records, but a FIT total:** distance-proportional allocation
+  preserves the device total without inventing terrain detail.
+- **No FIT elevation total:** elevation is omitted rather than estimated from
+  untrusted raw GPS altitude.
+- **Multi-lap activities:** a missing lap total receives only its
+  distance-proportional share of the session total, avoiding duplicated totals.
+- **Remainder segments:** participate normally and receive their distance or
+  shape-proportional share.
 
-**Why EWMA over a box (moving-average) filter?**
-
-A centred box filter spreads artefacts symmetrically around the point of
-interest. The sensor lock-on drift at run start (apparent descent of several
-metres over the first 500 m) would be smeared forward into the first few
-segments. EWMA is causal — it decays the initial error exponentially, so by
-the time the sensor has stabilised (~50–100 records into the lap) the smoothed
-value has converged to the true altitude.
-
-**Why run it across the whole lap, not per segment?**
-
-If the EWMA were reset at every segment boundary, each segment would start
-with a stale initial value equal to the last sample of the previous segment's
-raw altitude. Running a single pass over the whole lap means the smoothing
-state is continuous and segment boundaries have no effect on accuracy.
-
-### Step 2 — Per-segment Hysteresis
-
-After smoothing, each segment receives the slice of smoothed points whose
-cumulative distance falls within `[segStart, segEnd]`. A hysteresis filter
-is applied to that slice:
-
-```
-committed ← first smoothed point in segment
-for each subsequent point p:
-    delta ← p.alt − committed
-    if delta ≥ threshold:
-        gain += delta
-        committed ← p.alt
-    else if delta ≤ −threshold:
-        loss += |delta|
-        committed ← p.alt
-```
-
-The **threshold** is chosen based on the altitude data source:
-
-| Source | Threshold | Rationale |
-|--------|-----------|-----------|
-| Barometric (`EnhancedAltitude` field present) | **2 m** | Matches Strava's stated threshold for barometric data; barometric sensors are accurate to ~0.5 m relative, so 2 m is conservative enough to reject noise while catching real terrain |
-| GPS-only (`Altitude` field, no `EnhancedAltitude`) | **8 m** | GPS vertical accuracy is typically ±5–15 m; 8 m rejects noise while still detecting meaningful climbs on hilly terrain |
-
-The source is detected automatically from the FIT record fields:
-- `EnhancedAltitude` present → barometric
-- Only `Altitude` present → GPS-derived
-
----
-
-## Behaviour on Edge Cases
-
-### No altitude data
-If no records in the lap have valid altitude, `elevation_gain_m` and
-`elevation_loss_m` are omitted from the segment YAML entirely.
-
-### GPS-only on flat terrain
-With an 8 m threshold on a flat urban run, most or all segments will report
-no gain/loss. This is the correct and honest result — GPS-only altitude cannot
-reliably distinguish 2–3 m undulations from noise.
-
-### Sensor lock-on at run start
-The EWMA smoothing handles this naturally. The first segment may still show
-a small apparent loss as the barometric sensor settles, but the magnitude is
-significantly reduced compared to raw summing. This is a known limitation of
-any purely sensor-based approach; DEM correction (not implemented) would
-eliminate it entirely.
-
-### Short segments (remainder tails)
-The algorithm treats remainder segments identically to full-length segments.
-If there are fewer smoothed points than the hysteresis threshold requires,
-zero gain/loss is reported — which is correct for very short tails.
-
----
-
-## Comparison with Platform Approaches
-
-| Platform | Method |
-|----------|--------|
-| **Garmin (device)** | Proprietary on-device filter; result stored in FIT `TotalAscent`/`TotalDescent` lap fields. Accurate but opaque and not always present for all lap types. |
-| **Strava** | Smoothing + threshold: 10 m for GPS-only, 2 m for barometric. Applied to the whole activity, not per segment. |
-| **RideWithGPS** | "Mathematical smoothing then point-to-point delta summation" (their words). Threshold undisclosed. |
-| **fit-agent** | EWMA (α=0.1) over whole lap → per-segment hysteresis (2 m barometric, 8 m GPS). Does not rely on pre-computed device totals. |
-
----
-
-## Configuration
-
-`auto_split_distance` controls segment size. The elevation algorithm is
-applied automatically whenever auto-splits are generated. See
-[configuration reference](../README.md) for `auto_split_distance` syntax.
+`auto_split_distance` controls segment length (`1km` by default, `none` to
+disable it). The configuration changes only presentation; raw cache files are
+unchanged.

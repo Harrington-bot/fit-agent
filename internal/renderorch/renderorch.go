@@ -47,6 +47,8 @@ type Context struct {
 	// implicit splitting; positive value (metres) enables it. When unset
 	// the default 1 km (1000 m) is applied by the render layer.
 	AutoSplitDistanceM int
+	// Units controls agent-facing metric or imperial values; cache remains SI.
+	Units string
 }
 
 func (c Context) now() time.Time {
@@ -222,6 +224,7 @@ func Wellness(ctx context.Context, c Context, r daterange.Range) (Stats, error) 
 			GeneratedAt: c.now(),
 			Location:    c.Location,
 			Days:        days,
+			Units:       c.Units,
 		})
 		if err != nil {
 			stats.Errors++
@@ -406,6 +409,7 @@ func renderActivityDay(c Context, date time.Time, inputs []render.ActivityInput)
 		Location:           c.Location,
 		Activities:         inputs,
 		AutoSplitDistanceM: autoSplit,
+		Units:              c.Units,
 	})
 }
 

@@ -96,11 +96,22 @@ func (s PullStats) String() string {
 		s.Events, s.CacheRemoved, s.Render.String(), s.Errors)
 }
 
-// Sync runs the full push-then-pull flow over the supplied range.
+// Sync refreshes the remote event inventory before planning mutations, then
+// pushes local changes and performs a final pull. The preflight makes a
+// deleted or stale local cache safe: an existing remote event is reconciled
+// by date and name instead of being created a second time.
 func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	var res Result
 
-	// 1. Push agent-authored markdown to icu.
+	// 1. Refresh the cache before planning. This is intentionally read-only on
+	// the remote service; local cache/render writes still respect --dry-run.
+	preflight, err := pull(ctx, c, r)
+	if err != nil {
+		return res, fmt.Errorf("preflight pull: %w", err)
+	}
+	c.logf("preflight remote inventory: %d events", preflight.Events)
+
+	// 2. Push agent-authored markdown to icu using the fresh inventory.
 	pctx := pushorch.Context{
 		Client:    c.Client,
 		AthleteID: c.AthleteID,
@@ -119,7 +130,7 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	}
 	res.Push = pushorch.Summarise(actions)
 
-	// 2. Pull from icu and reconcile the workspace.
+	// 3. Pull from icu and reconcile the workspace after mutations.
 	pullStats, err := pull(ctx, c, r)
 	res.Pull = pullStats
 	if err != nil {

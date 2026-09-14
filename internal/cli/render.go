@@ -174,5 +174,6 @@ func renderCtx(cmd *cobra.Command, r *runtime.Resolved, dryRun bool) renderorch.
 		DryRun:             dryRun,
 		Logger:             makeLogger(cmd),
 		AutoSplitDistanceM: autoSplitM,
+		Units:              r.Profile.UnitSystem(),
 	}
 }

@@ -49,6 +49,32 @@ type ActivityDay struct {
 	// consecutive segments of this distance (plus a remainder tail).
 	// 0 disables the feature.
 	AutoSplitDistanceM int
+	// Units is "metric" (default) or "imperial" and affects only rendered YAML.
+	Units string
+}
+
+func writeDistance(b *bytes.Buffer, indent string, metres float64, units string) {
+	if units == "imperial" {
+		fmt.Fprintf(b, "%sdistance_mi: %s\n", indent, formatFloat(metres/1609.344, 2))
+		return
+	}
+	fmt.Fprintf(b, "%sdistance_m: %s\n", indent, formatFloat(metres, 1))
+}
+
+func writeElevation(b *bytes.Buffer, indent, name string, metres float64, units string) {
+	if units == "imperial" {
+		fmt.Fprintf(b, "%s%s_ft: %s\n", indent, name, formatFloat(metres*3.28084, 1))
+		return
+	}
+	fmt.Fprintf(b, "%s%s_m: %s\n", indent, name, formatFloat(metres, 1))
+}
+
+func writeSpeed(b *bytes.Buffer, indent string, metresPerSecond float64, units string) {
+	if units == "imperial" {
+		fmt.Fprintf(b, "%savg_speed_mph: %s\n", indent, formatFloat(metresPerSecond*2.236936, 3))
+		return
+	}
+	fmt.Fprintf(b, "%savg_speed_mps: %s\n", indent, formatFloat(metresPerSecond, 3))
 }
 
 // ActivityInput pairs the icu summary with the parsed FIT.
@@ -85,22 +111,27 @@ func ActivityDayYAML(day ActivityDay) ([]byte, error) {
 
 	for _, a := range acts {
 		b.WriteString("---\n")
-		writeActivityDoc(&b, a, loc, day.AutoSplitDistanceM)
+		writeActivityDoc(&b, a, loc, day.AutoSplitDistanceM, day.Units)
 	}
 	return b.Bytes(), nil
 }
 
 func writeActivityHeader(b *bytes.Buffer, day ActivityDay, loc *time.Location) {
 	b.WriteString("# fit-agent activity day. Regenerated on every `fit-agent fetch`.\n")
-	b.WriteString("# Units: time in seconds (HH:MM:SS where labeled), distance in meters,\n")
-	b.WriteString("# speed in m/s, pace in sec/km, power in watts, HR in bpm.\n")
+	if day.Units == "imperial" {
+		b.WriteString("# Units: time in seconds (HH:MM:SS where labeled), distance in miles, elevation in feet,\n")
+		b.WriteString("# speed in mph, pace in sec/mi, power in watts, HR in bpm.\n")
+	} else {
+		b.WriteString("# Units: time in seconds (HH:MM:SS where labeled), distance in meters,\n")
+		b.WriteString("# speed in m/s, pace in sec/km, power in watts, HR in bpm.\n")
+	}
 	b.WriteString("# Source of truth: ../.cache/activities/<icu_id>.{json,fit}\n")
 	fmt.Fprintf(b, "date: %s\n", day.Date.Format("2006-01-02"))
 	fmt.Fprintf(b, "generated_at: %s\n", day.GeneratedAt.In(loc).Format(time.RFC3339))
 	b.WriteString("source: intervals.icu\n")
 }
 
-func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, autoSplitM int) {
+func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, autoSplitM int, units string) {
 	s := a.Summary
 	fmt.Fprintf(b, "icu_id: %s\n", yamlString(s.ID))
 	fmt.Fprintf(b, "name: %s\n", yamlString(s.Name))
@@ -115,7 +146,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 		fmt.Fprintf(b, "moving_time_s: %d\n", s.MovingTime)
 	}
 	if s.Distance > 0 {
-		fmt.Fprintf(b, "distance_m: %s\n", formatFloat(s.Distance, 1))
+		writeDistance(b, "", s.Distance, units)
 	}
 	// Elevation: prefer record-stream EWMA+hysteresis over raw ICU/Garmin GPS values,
 	// which accumulate GPS drift into phantom gain on flat terrain. ICU-sourced FIT
@@ -131,10 +162,10 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 		}
 	}
 	if actElevGain > 0 {
-		fmt.Fprintf(b, "elevation_gain_m: %s\n", formatFloat(actElevGain, 1))
+		writeElevation(b, "", "elevation_gain", actElevGain, units)
 	}
 	if actElevLoss > 0 {
-		fmt.Fprintf(b, "elevation_loss_m: %s\n", formatFloat(actElevLoss, 1))
+		writeElevation(b, "", "elevation_loss", actElevLoss, units)
 	}
 	if s.IcuTrainingLoad > 0 {
 		fmt.Fprintf(b, "tss: %s\n", formatFloat(s.IcuTrainingLoad, 1))
@@ -155,7 +186,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 		fmt.Fprintf(b, "max_power: %d\n", s.MaxWatts)
 	}
 	if s.AverageSpeed > 0 {
-		fmt.Fprintf(b, "avg_speed_mps: %s\n", formatFloat(s.AverageSpeed, 3))
+		writeSpeed(b, "", s.AverageSpeed, units)
 	}
 	if s.Description != "" {
 		fmt.Fprintf(b, "athlete_notes: %s\n", yamlBlockScalar(s.Description, 0))
@@ -175,9 +206,11 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 		windDeg = s.PrevailingWindDeg
 	}
 	if len(a.FIT.Laps) > 0 {
+		var totalLapDistance float64
+		for _, l := range a.FIT.Laps { totalLapDistance += l.Distance }
 		b.WriteString("laps:\n")
 		for _, l := range a.FIT.Laps {
-			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg, a.FIT.HasBarometer)
+			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg, a.FIT.HasBarometer, a.FIT.ElevationGain, a.FIT.ElevationLoss, totalLapDistance, units)
 		}
 	}
 	if len(a.FIT.Intervals) > 0 {
@@ -188,7 +221,7 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	}
 }
 
-func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int, hasBarometer bool) {
+func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM int, records []fitparse.Record, windDeg *int, hasBarometer bool, sessionGain, sessionLoss, totalLapDistance float64, units string) {
 	fmt.Fprintf(b, "  - i: %d\n", l.Index)
 	if l.Intensity != "" {
 		fmt.Fprintf(b, "    type: %s\n", yamlString(l.Intensity))
@@ -209,7 +242,7 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 		fmt.Fprintf(b, "    elapsed_s: %d\n", int(l.ElapsedTime.Seconds()+0.5))
 	}
 	if l.Distance > 0 {
-		fmt.Fprintf(b, "    distance_m: %s\n", formatFloat(l.Distance, 1))
+		writeDistance(b, "    ", l.Distance, units)
 	}
 	if l.AvgHR > 0 {
 		fmt.Fprintf(b, "    avg_hr: %d\n", l.AvgHR)
@@ -224,10 +257,14 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 		fmt.Fprintf(b, "    avg_cadence: %d\n", l.AvgCadence)
 	}
 	if l.AvgSpeed > 0 {
-		fmt.Fprintf(b, "    avg_speed_mps: %s\n", formatFloat(l.AvgSpeed, 3))
+		writeSpeed(b, "    ", l.AvgSpeed, units)
 	}
 	if l.AvgPaceSecPerKm > 0 {
-		fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
+		if units == "imperial" {
+			fmt.Fprintf(b, "    avg_pace_sec_per_mi: %d\n", int(float64(l.AvgPaceSecPerKm)*1.609344+0.5))
+		} else {
+			fmt.Fprintf(b, "    avg_pace_sec_per_km: %d\n", l.AvgPaceSecPerKm)
+		}
 	}
 	// Elevation: always compute from the record stream using EWMA+hysteresis.
 	// FIT lap TotalAscent/TotalDescent values are GPS-derived on most devices
@@ -262,10 +299,10 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 		elevLoss = l.ElevationLoss
 	}
 	if elevGain > 0 {
-		fmt.Fprintf(b, "    elevation_gain_m: %s\n", formatFloat(elevGain, 1))
+		writeElevation(b, "    ", "elevation_gain", elevGain, units)
 	}
 	if elevLoss > 0 {
-		fmt.Fprintf(b, "    elevation_loss_m: %s\n", formatFloat(elevLoss, 1))
+		writeElevation(b, "    ", "elevation_loss", elevLoss, units)
 	}
 	if l.Calories > 0 {
 		fmt.Fprintf(b, "    calories: %d\n", l.Calories)
@@ -285,18 +322,22 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 	}
 	// Auto-splits: divide long unsegmented active laps into equal segments.
 	if autoSplitM > 0 && l.Distance > float64(autoSplitM) {
-		segs := autoSplitLap(l, autoSplitM, records, hasBarometer)
+		segs := autoSplitLap(l, autoSplitM, records, hasBarometer, sessionGain, sessionLoss, totalLapDistance)
 		if len(segs) > 1 {
 			b.WriteString("    auto_splits:\n")
 			for _, s := range segs {
 				fmt.Fprintf(b, "      - segment: %d\n", s.segment)
 				fmt.Fprintf(b, "        source: auto_split\n")
-				fmt.Fprintf(b, "        distance_m: %s\n", formatFloat(s.distanceM, 1))
+				writeDistance(b, "        ", s.distanceM, units)
 				if s.durationS > 0 {
 					fmt.Fprintf(b, "        duration_s: %d\n", s.durationS)
 				}
 				if s.avgPaceSecPerKm > 0 {
+					if units == "imperial" {
+					fmt.Fprintf(b, "        avg_pace_sec_per_mi: %d\n", int(float64(s.avgPaceSecPerKm)*1.609344+0.5))
+				} else {
 					fmt.Fprintf(b, "        avg_pace_sec_per_km: %d\n", s.avgPaceSecPerKm)
+				}
 				}
 				if s.avgHR > 0 {
 					fmt.Fprintf(b, "        avg_hr: %d\n", s.avgHR)
@@ -308,10 +349,10 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 					fmt.Fprintf(b, "        avg_cadence: %d\n", s.avgCadence)
 				}
 				if s.elevationGainM > 0 {
-					fmt.Fprintf(b, "        elevation_gain_m: %s\n", formatFloat(s.elevationGainM, 1))
+					writeElevation(b, "        ", "elevation_gain", s.elevationGainM, units)
 				}
 				if s.elevationLossM > 0 {
-					fmt.Fprintf(b, "        elevation_loss_m: %s\n", formatFloat(s.elevationLossM, 1))
+					writeElevation(b, "        ", "elevation_loss", s.elevationLossM, units)
 				}
 				// Per-segment wind stats from GPS bearing.
 				if windDeg != nil {
@@ -361,7 +402,7 @@ type autoSplitSegment struct {
 // All laps longer than splitM are split regardless of intensity, so that
 // easy/recovery laps from Garmin structured workouts (which carry intensity
 // "recovery" rather than "active") also receive per-km splits.
-func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBarometer bool) []autoSplitSegment {
+func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBarometer bool, sessionGain, sessionLoss, totalLapDistance float64) []autoSplitSegment {
 	if l.Distance <= 0 || splitM <= 0 {
 		return nil
 	}
@@ -454,6 +495,12 @@ func autoSplitLap(l fitparse.Lap, splitM int, records []fitparse.Record, hasBaro
 	if len(lapRecs) > 0 {
 		applyElevation(segs, lapRecs, lapStartDist, float64(splitM), lapEndDist, total-1, hasBarometer)
 	}
+	// Anchor derived split shape to FIT's authoritative filtered lap/session totals.
+	lapGain, lapLoss := l.ElevationGain, l.ElevationLoss
+	if totalLapDistance <= 0 { totalLapDistance = l.Distance }
+	if lapGain == 0 && sessionGain > 0 { lapGain = sessionGain * l.Distance / totalLapDistance }
+	if lapLoss == 0 && sessionLoss > 0 { lapLoss = sessionLoss * l.Distance / totalLapDistance }
+	if lapGain > 0 || lapLoss > 0 { scaleElevationToTotals(segs, lapGain, lapLoss) }
 
 	return segs
 }
@@ -561,6 +608,16 @@ func applyElevation(segs []autoSplitSegment, lapRecs []fitparse.Record, lapStart
 		}
 		segs[i].elevationGainM = gain
 		segs[i].elevationLossM = loss
+	}
+}
+
+// scaleElevationToTotals anchors filtered elevation shape to FIT totals, falling back to distance.
+func scaleElevationToTotals(segs []autoSplitSegment, totalGain, totalLoss float64) {
+	var gainShape, lossShape, distance float64
+	for _, seg := range segs { gainShape += seg.elevationGainM; lossShape += seg.elevationLossM; distance += seg.distanceM }
+	for i := range segs {
+		if totalGain > 0 { if gainShape > 0 { segs[i].elevationGainM = totalGain * segs[i].elevationGainM / gainShape } else { segs[i].elevationGainM = totalGain * segs[i].distanceM / distance } }
+		if totalLoss > 0 { if lossShape > 0 { segs[i].elevationLossM = totalLoss * segs[i].elevationLossM / lossShape } else { segs[i].elevationLossM = totalLoss * segs[i].distanceM / distance } }
 	}
 }
 

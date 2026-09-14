@@ -18,7 +18,7 @@ func newSyncWorkoutsCmd() *cobra.Command {
 		Short: "Two-way sync of planned workouts with intervals.icu",
 		Long: `sync-workouts is the agent's primary workout-calendar command.
 
-It runs in two phases:
+It refreshes the remote event inventory, then runs two phases:
 
   1. Push: every agent-authored fit-agent/planned-workouts/*.md file in
      range is diffed against the cached intervals.icu snapshot and the
@@ -34,9 +34,10 @@ It runs in two phases:
      agent's frontmatter, prose, and ` + "`fit-workout`" + ` fences are
      preserved byte-for-byte.
 
-Push runs first so that workouts the agent just authored are returned
-by the subsequent pull and stamped with their server-assigned id in
-the locally-authored file.
+The preflight refresh prevents duplicate events after a deleted local
+cache: matching remote events are recovered by date and name before a
+create can be planned. The final pull returns newly-authored workouts
+and stamps their server-assigned ids in locally-authored files.
 
 Pass --prune to also DELETE icu events that no longer have a matching
 locally-authored markdown file (otherwise such events are reported as

@@ -10,8 +10,9 @@ It bridges [intervals.icu](https://intervals.icu) (where your devices
 already sync) and an [OpenClaw](https://docs.openclaw.ai) workspace (where
 your agent does its thinking).
 
-> **Status:** pre-alpha. Design is set, code is being written. See
-> [`agent-plan.md`](./agent-plan.md) for the v1 roadmap.
+> **Status:** early release candidate. The CLI and its local test suite are
+> usable; an intervals.icu API key and an OpenClaw workspace are required for
+> a live sync. See [`agent-plan.md`](./agent-plan.md) for design details.
 
 ## What it does
 
@@ -50,12 +51,13 @@ my-coaching/
     └── .cache/                          # raw icu JSON + .fit files
 ```
 
-## Commands (planned for v1)
+## Commands
 
 ```sh
 fit-agent init                    # one-time setup; scaffolds the workspace
 fit-agent fetch --since 30d       # pull activities + wellness + planned
 fit-agent sync-workouts           # push agent-authored workouts and pull icu-side ones
+fit-agent sync-athlete-profile    # refresh machine-readable fitness markers
 fit-agent serve                   # poll intervals.icu on a cadence (daemon)
 fit-agent setup-service           # install ~/.config/systemd/user/fit-agent.service
 fit-agent remove-service          # tear it down again
@@ -69,6 +71,21 @@ fit-agent render activity <id>    # cache → YAML, no network
 fit-agent fit laps <file.fit>     # inspect a parsed .fit file
 fit-agent workout render <file>   # convert the fit-workout DSL
 ```
+
+## Configuration and units
+
+`fit-agent init` stores profiles in `${XDG_CONFIG_HOME:-~/.config}/fit-agent/config.toml`.
+Rendered workspace files use metric units by default. Set `units = "imperial"`
+inside a profile to render distances in miles, elevation in feet, speed in mph,
+pace in seconds per mile, and wellness weight in pounds. The raw `.cache/`
+payloads always remain in the units supplied by intervals.icu.
+
+## Release verification
+
+CI runs module verification, builds, `go vet`, race-enabled tests, and linting.
+The `release-validate` workflow can be triggered manually (or by a `v*` tag)
+to build downloadable platform artifacts. It has read-only permissions and does
+not publish a package or create a GitHub release.
 
 ## How it works with your agent
 

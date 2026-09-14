@@ -55,6 +55,17 @@ type Profile struct {
 	// "1km" (default), "500m", "2km", or "none"/"null"/"" to disable.
 	// When unset the default of 1 km is applied.
 	AutoSplitDistance string `toml:"auto_split_distance,omitempty"`
+	// Units controls agent-facing render output. Raw cache data is always SI.
+	// Accepted values are "metric" (the default) and "imperial".
+	Units string `toml:"units,omitempty"`
+}
+
+// UnitSystem returns the validated display system, defaulting safely to metric.
+func (p Profile) UnitSystem() string {
+	if strings.EqualFold(strings.TrimSpace(p.Units), "imperial") {
+		return "imperial"
+	}
+	return "metric"
 }
 
 // AutoSplitDistanceM parses the profile's AutoSplitDistance string and
