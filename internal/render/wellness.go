@@ -25,6 +25,8 @@ type WellnessMonth struct {
 	// Days is the per-day wellness rows. Ids are expected to be
 	// ISO calendar dates (YYYY-MM-DD).
 	Days []icu.WellnessDay
+	// Units is "metric" (default) or "imperial" for display-only fields.
+	Units string
 }
 
 // WellnessMonthYAML returns the YAML for one month of wellness data.
@@ -59,7 +61,11 @@ func WellnessMonthYAML(m WellnessMonth) ([]byte, error) {
 	b.WriteString(m.Month.Format("2006-01"))
 	b.WriteString(". Upserted by date on every `fit-agent fetch`.\n")
 	b.WriteString("# Units: HR in bpm, sleep in hours (sleep_hours) and seconds\n")
-	b.WriteString("# (sleep_seconds), weight in kg, stress unit-less, hrv (RMSSD) in ms.\n")
+	if m.Units == "imperial" {
+		b.WriteString("# (sleep_seconds), weight in lb, stress unit-less, hrv (RMSSD) in ms.\n")
+	} else {
+		b.WriteString("# (sleep_seconds), weight in kg, stress unit-less, hrv (RMSSD) in ms.\n")
+	}
 	b.WriteString("# Source of truth: ../.cache/wellness/")
 	b.WriteString(m.Month.Format("2006-01"))
 	b.WriteString(".json\n")
@@ -67,12 +73,12 @@ func WellnessMonthYAML(m WellnessMonth) ([]byte, error) {
 	fmt.Fprintf(&b, "generated_at: %s\n", m.GeneratedAt.In(loc).Format(time.RFC3339))
 	b.WriteString("days:\n")
 	for _, d := range days {
-		writeWellnessDay(&b, d)
+		writeWellnessDay(&b, d, m.Units)
 	}
 	return b.Bytes(), nil
 }
 
-func writeWellnessDay(b *bytes.Buffer, d icu.WellnessDay) {
+func writeWellnessDay(b *bytes.Buffer, d icu.WellnessDay, units string) {
 	fmt.Fprintf(b, "  %q:\n", d.ID)
 	if d.RestingHR > 0 {
 		fmt.Fprintf(b, "    resting_hr: %d\n", d.RestingHR)
@@ -100,7 +106,11 @@ func writeWellnessDay(b *bytes.Buffer, d icu.WellnessDay) {
 		fmt.Fprintf(b, "    steps: %d\n", d.Steps)
 	}
 	if d.Weight > 0 {
-		fmt.Fprintf(b, "    weight_kg: %s\n", formatFloat(d.Weight, 2))
+		if units == "imperial" {
+			fmt.Fprintf(b, "    weight_lb: %s\n", formatFloat(d.Weight*2.2046226218, 2))
+		} else {
+			fmt.Fprintf(b, "    weight_kg: %s\n", formatFloat(d.Weight, 2))
+		}
 	}
 	if d.BodyFat > 0 {
 		fmt.Fprintf(b, "    body_fat_pct: %s\n", formatFloat(d.BodyFat, 1))

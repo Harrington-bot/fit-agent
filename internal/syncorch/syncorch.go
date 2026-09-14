@@ -96,11 +96,23 @@ func (s PullStats) String() string {
 		s.Events, s.CacheRemoved, s.Render.String(), s.Errors)
 }
 
-// Sync runs the full push-then-pull flow over the supplied range.
+// Sync refreshes the remote event inventory before planning mutations, then
+// pushes local changes and performs a final pull. The preflight makes a
+// deleted or stale local cache safe: an existing remote event is reconciled
+// by date and name instead of being created a second time.
 func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	var res Result
 
-	// 1. Push agent-authored markdown to icu.
+	// 1. Refresh the cache before planning. This is intentionally read-only on
+	// the remote service; local cache writes still respect --dry-run. Rendering
+	// waits until the final reconciliation after push mutations.
+	preflight, err := pull(ctx, c, r, false)
+	if err != nil {
+		return res, fmt.Errorf("preflight pull: %w", err)
+	}
+	c.logf("preflight remote inventory: %d events", preflight.Events)
+
+	// 2. Push agent-authored markdown to icu using the fresh inventory.
 	pctx := pushorch.Context{
 		Client:    c.Client,
 		AthleteID: c.AthleteID,
@@ -119,8 +131,13 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	}
 	res.Push = pushorch.Summarise(actions)
 
-	// 2. Pull from icu and reconcile the workspace.
-	pullStats, err := pull(ctx, c, r)
+	// 3. Pull from icu and reconcile the workspace after mutations.
+	pullStats, err := pull(ctx, c, r, true)
+	// Preflight cache pruning is an observable reconciliation action too. Its
+	// inventory is superseded by the final pull, but retain its removals in the
+	// summary so a Sync result reports every local cache deletion it performed.
+	pullStats.CacheRemoved += preflight.CacheRemoved
+	pullStats.Errors += preflight.Errors
 	res.Pull = pullStats
 	if err != nil {
 		return res, fmt.Errorf("pull: %w", err)
@@ -128,9 +145,9 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	return res, nil
 }
 
-// pull fetches events from icu, refreshes the events cache, prunes
-// stale cache entries, and delegates rendering to renderorch.Planned.
-func pull(ctx context.Context, c Context, r daterange.Range) (PullStats, error) {
+// pull fetches events from icu, refreshes the events cache, and prunes stale
+// cache entries. When render is true, it also delegates to renderorch.Planned.
+func pull(ctx context.Context, c Context, r daterange.Range, render bool) (PullStats, error) {
 	var stats PullStats
 	events, err := c.Client.ListEvents(ctx, c.AthleteID, r.Oldest, r.Newest, icu.EventCategoryWorkout)
 	if err != nil {
@@ -156,6 +173,9 @@ func pull(ctx context.Context, c Context, r daterange.Range) (PullStats, error) 
 		return stats, err
 	}
 	stats.CacheRemoved = removed
+	if !render {
+		return stats, nil
+	}
 
 	// Delegate to renderorch.Planned: it reads the freshly-updated
 	// cache and rewrites the machine block inside each
