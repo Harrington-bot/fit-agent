@@ -265,6 +265,11 @@ func TestAutoSplitElevationIsAnchoredToLapTotals(t *testing.T) {
 		t.Fatalf("segments=%d", len(segs))
 	}
 	var gain, loss float64
-	for _, s := range segs { gain += s.elevationGainM; loss += s.elevationLossM }
-	if gain != 10 || loss != 4 { t.Errorf("totals gain=%v loss=%v, want 10 and 4", gain, loss) }
+	for _, s := range segs {
+		gain += s.elevationGainM
+		loss += s.elevationLossM
+	}
+	if gain != 10 || loss != 4 {
+		t.Errorf("totals gain=%v loss=%v, want 10 and 4", gain, loss)
+	}
 }

@@ -336,10 +336,14 @@ func writeLap(b *bytes.Buffer, l fitparse.Lap, loc *time.Location, autoSplitM in
 				}
 				if s.avgPaceSecPerKm > 0 {
 					if units == "imperial" {
-					fmt.Fprintf(b, "        avg_pace_sec_per_mi: %d\n", int(float64(s.avgPaceSecPerKm)*1.609344+0.5))
-				} else {
-					fmt.Fprintf(b, "        avg_pace_sec_per_km: %d\n", s.avgPaceSecPerKm)
-				}
+						fmt.Fprintf(
+							b,
+							"        avg_pace_sec_per_mi: %d\n",
+							int(float64(s.avgPaceSecPerKm)*1.609344+0.5),
+						)
+					} else {
+						fmt.Fprintf(b, "        avg_pace_sec_per_km: %d\n", s.avgPaceSecPerKm)
+					}
 				}
 				if s.avgHR > 0 {
 					fmt.Fprintf(b, "        avg_hr: %d\n", s.avgHR)
