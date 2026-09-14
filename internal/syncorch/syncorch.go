@@ -104,8 +104,9 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	var res Result
 
 	// 1. Refresh the cache before planning. This is intentionally read-only on
-	// the remote service; local cache/render writes still respect --dry-run.
-	preflight, err := pull(ctx, c, r)
+	// the remote service; local cache writes still respect --dry-run. Rendering
+	// waits until the final reconciliation after push mutations.
+	preflight, err := pull(ctx, c, r, false)
 	if err != nil {
 		return res, fmt.Errorf("preflight pull: %w", err)
 	}
@@ -131,7 +132,12 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	res.Push = pushorch.Summarise(actions)
 
 	// 3. Pull from icu and reconcile the workspace after mutations.
-	pullStats, err := pull(ctx, c, r)
+	pullStats, err := pull(ctx, c, r, true)
+	// Preflight cache pruning is an observable reconciliation action too. Its
+	// inventory is superseded by the final pull, but retain its removals in the
+	// summary so a Sync result reports every local cache deletion it performed.
+	pullStats.CacheRemoved += preflight.CacheRemoved
+	pullStats.Errors += preflight.Errors
 	res.Pull = pullStats
 	if err != nil {
 		return res, fmt.Errorf("pull: %w", err)
@@ -139,9 +145,9 @@ func Sync(ctx context.Context, c Context, r daterange.Range) (Result, error) {
 	return res, nil
 }
 
-// pull fetches events from icu, refreshes the events cache, prunes
-// stale cache entries, and delegates rendering to renderorch.Planned.
-func pull(ctx context.Context, c Context, r daterange.Range) (PullStats, error) {
+// pull fetches events from icu, refreshes the events cache, and prunes stale
+// cache entries. When render is true, it also delegates to renderorch.Planned.
+func pull(ctx context.Context, c Context, r daterange.Range, render bool) (PullStats, error) {
 	var stats PullStats
 	events, err := c.Client.ListEvents(ctx, c.AthleteID, r.Oldest, r.Newest, icu.EventCategoryWorkout)
 	if err != nil {
@@ -167,6 +173,9 @@ func pull(ctx context.Context, c Context, r daterange.Range) (PullStats, error) 
 		return stats, err
 	}
 	stats.CacheRemoved = removed
+	if !render {
+		return stats, nil
+	}
 
 	// Delegate to renderorch.Planned: it reads the freshly-updated
 	// cache and rewrites the machine block inside each

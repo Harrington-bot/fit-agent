@@ -77,7 +77,7 @@ func syncAthleteProfile(layout workspace.Layout, athlete *icu.Athlete, now time.
 
 	sectionStart, sectionEnd, ok := currentFitnessMarkerSection(body)
 	if !ok {
-		return athleteProfileSyncResult{}, fmt.Errorf("athlete profile %s has no Current fitness markers section", path)
+		return athleteProfileSyncResult{}, fmt.Errorf("athlete profile %s has no recognised fitness marker lines (missing Current fitness markers section)", path)
 	}
 	section := body[sectionStart:sectionEnd]
 	values := athleteFitnessMarkers(athlete)
@@ -123,17 +123,32 @@ func syncAthleteProfile(layout workspace.Layout, athlete *icu.Athlete, now time.
 		insertAt := lastMarkerEnd
 		if insertAt < len(section) && section[insertAt] == '\n' {
 			insertAt++
-			section = append(section[:insertAt], append([]byte("- "+athleteProfileSyncLabel+": "+timestamp+eol), section[insertAt:]...)...)
+			section = insertProfileSectionLine(section, insertAt, []byte("- "+athleteProfileSyncLabel+": "+timestamp+eol))
 		} else {
-			section = append(section[:insertAt], append([]byte(eol+"- "+athleteProfileSyncLabel+": "+timestamp), section[insertAt:]...)...)
+			section = insertProfileSectionLine(section, insertAt, []byte(eol+"- "+athleteProfileSyncLabel+": "+timestamp))
 		}
 	}
-	body = append(append(body[:sectionStart], section...), body[sectionEnd:]...)
+	// Build a separate buffer rather than appending into body. The replacement
+	// values can be shorter than the authored lines, and append's in-place
+	// reuse would overwrite the still-needed suffix before it is copied.
+	updatedBody := make([]byte, 0, sectionStart+len(section)+len(body)-sectionEnd)
+	updatedBody = append(updatedBody, body[:sectionStart]...)
+	updatedBody = append(updatedBody, section...)
+	updatedBody = append(updatedBody, body[sectionEnd:]...)
+	body = updatedBody
 
 	if err := workspace.AtomicWrite(path, body, workspace.DefaultFileMode); err != nil {
 		return athleteProfileSyncResult{}, fmt.Errorf("write athlete profile %s: %w", path, err)
 	}
 	return athleteProfileSyncResult{Updated: updated}, nil
+}
+
+func insertProfileSectionLine(section []byte, at int, line []byte) []byte {
+	updated := make([]byte, 0, len(section)+len(line))
+	updated = append(updated, section[:at]...)
+	updated = append(updated, line...)
+	updated = append(updated, section[at:]...)
+	return updated
 }
 
 type profileFitnessMarker struct {
