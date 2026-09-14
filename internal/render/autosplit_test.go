@@ -261,7 +261,9 @@ func TestAutoSplitElevationIsAnchoredToLapTotals(t *testing.T) {
 		{Timestamp: start.Add(4 * time.Minute), Distance: 2000, Altitude: 100, AltitudeValid: true},
 	}
 	segs := autoSplitLap(lap, 1000, records, false, 0, 0, 2000)
-	if len(segs) != 2 { t.Fatalf("segments=%d", len(segs)) }
+	if len(segs) != 2 {
+		t.Fatalf("segments=%d", len(segs))
+	}
 	var gain, loss float64
 	for _, s := range segs { gain += s.elevationGainM; loss += s.elevationLossM }
 	if gain != 10 || loss != 4 { t.Errorf("totals gain=%v loss=%v, want 10 and 4", gain, loss) }

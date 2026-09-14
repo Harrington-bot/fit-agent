@@ -207,7 +207,9 @@ func writeActivityDoc(b *bytes.Buffer, a ActivityInput, loc *time.Location, auto
 	}
 	if len(a.FIT.Laps) > 0 {
 		var totalLapDistance float64
-		for _, l := range a.FIT.Laps { totalLapDistance += l.Distance }
+		for _, l := range a.FIT.Laps {
+			totalLapDistance += l.Distance
+		}
 		b.WriteString("laps:\n")
 		for _, l := range a.FIT.Laps {
 			writeLap(b, l, loc, autoSplitM, a.FIT.Records, windDeg, a.FIT.HasBarometer, a.FIT.ElevationGain, a.FIT.ElevationLoss, totalLapDistance, units)
